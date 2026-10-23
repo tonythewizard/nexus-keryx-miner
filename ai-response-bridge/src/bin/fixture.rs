@@ -1,7 +1,9 @@
 use blake2b_simd::Params;
 use keryx_inference::{escrow_pubkey_of, seal_request, AiRequestPayload};
 use secp256k1::{Keypair, Message, Secp256k1, SecretKey};
-use std::{env, fs::OpenOptions, io::Write, os::unix::fs::OpenOptionsExt, path::Path};
+use std::{env, fs::OpenOptions, io::Write, path::Path};
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 
 fn hex32(value: &str) -> Result<[u8; 32], String> {
     if value.len() != 64 { return Err("model ID must be 32-byte hex".into()); }
@@ -37,7 +39,13 @@ fn main() -> Result<(), String> {
         _ => return Err("fixture kind must be public or private".into()),
     };
     let path = Path::new(&args[4]);
-    let mut file = OpenOptions::new().write(true).create_new(true).mode(0o600).open(path)
+    // This helper creates synthetic fixtures with repeated test identities.
+    // Windows inherits the selected test directory's ACL, never a production key.
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options.open(path)
         .map_err(|e| format!("cannot create isolated fixture: {e}"))?;
     file.write_all(&(payload.len() as u32).to_le_bytes()).map_err(|e| e.to_string())?;
     file.write_all(&payload).map_err(|e| e.to_string())?;

@@ -206,7 +206,7 @@ if(NEXUS_ENABLE_GRPC)
       ai-response-bridge/src/verified_inference.rs ai-response-bridge/src/trace_producer.rs
       ai-response-bridge/src/trace_store.rs ai-response-bridge/src/trace_recovery.rs
       vendor/keryx-verifiable-inference/Cargo.toml ${NEXUS_VERIFIED_INFERENCE_SOURCES} ${NEXUS_TRACE_MANIFESTS}
-      ai-response-bridge/build.rs ai-response-bridge/src/lib.rs
+      ai-response-bridge/build.rs ai-response-bridge/src/lib.rs ai-response-bridge/src/bin/fixture.rs
       vendor/keryx-miner-v057/src/escrow.rs vendor/keryx-miner-v057/proto/rpc.proto
       vendor/keryx-inference-v057/inference/Cargo.toml
       vendor/keryx-inference-v057/inference/src/ai_payload.rs
