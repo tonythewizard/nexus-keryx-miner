@@ -8,7 +8,7 @@ permissions:
 jobs:
   cpu:
     runs-on: windows-2022
-    timeout-minutes: 45
+    timeout-minutes: 120
     env:
       VCPKG_DEFAULT_TRIPLET: x64-windows-static-md
       VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.local/vcpkg-cache
@@ -17,7 +17,8 @@ jobs:
         with:
           persist-credentials: false
       - name: Restore compiled dependencies
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        id: depcache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: .local/vcpkg-cache
           key: windows-vcpkg-${{ hashFiles('tools/windows/vcpkg.json') }}
@@ -29,7 +30,10 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           git -C .local/vcpkg checkout 23b8a8e7409c2d6346114a88e834165bde79a51c
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          & .local/vcpkg/bootstrap-vcpkg.bat -disableMetrics
+          for ($attempt = 0; $attempt -lt 3; $attempt++) {
+            & .local/vcpkg/bootstrap-vcpkg.bat -disableMetrics
+            if ($LASTEXITCODE -eq 0) { break }
+          }
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Configure MSVC x64
         shell: pwsh
@@ -49,7 +53,7 @@ jobs:
         uses: Jimver/cuda-toolkit@b8bf9c6c28f8a92fbb04dcfcaee872e60c57462d
         with:
           cuda: '13.0.2'
-          sub-packages: '["nvcc", "cudart", "nvrtc", "visual_studio_integration"]'
+          sub-packages: '["nvcc", "cudart", "nvrtc", "cublas", "cublas_dev", "visual_studio_integration"]'
           use-github-cache: 'false'
       - name: Configure native NVIDIA worker
         shell: pwsh
@@ -68,3 +72,10 @@ jobs:
         run: python tools/fetch_upstream.py
       - name: Build independent native verifier
         run: cargo build --release --locked --manifest-path oracle-rust/Cargo.toml --jobs 2
+
+      - name: Save compiled dependencies
+        if: always() && steps.depcache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: .local/vcpkg-cache
+          key: windows-vcpkg-${{ hashFiles('tools/windows/vcpkg.json') }}

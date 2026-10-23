@@ -26,3 +26,8 @@ add_test(NAME native_file_reads COMMAND nexus-platform-file-test "${CMAKE_BINARY
 foreach(case capture pipeline live_job_queue proof_transport merkle_prefetch gguf_reader)
   target_compile_options(nexus-${case}-test PRIVATE /UNDEBUG)
 endforeach()
+add_executable(nexus-windows-process-test tests/windows_process_test.cpp)
+target_include_directories(nexus-windows-process-test PRIVATE include)
+target_link_libraries(nexus-windows-process-test PRIVATE advapi32)
+add_test(NAME native_verifier_transport COMMAND nexus-windows-process-test)
+set_tests_properties(native_verifier_transport PROPERTIES TIMEOUT 15)

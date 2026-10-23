@@ -10,3 +10,7 @@ add_library(nexus_blake2_reference STATIC "${nexus_blake2_SOURCE_DIR}/src/blake2
 set(BLAKE2_INCLUDE_DIR "${nexus_blake2_SOURCE_DIR}/src")
 target_include_directories(nexus_blake2_reference PUBLIC "${BLAKE2_INCLUDE_DIR}")
 set(BLAKE2_LIBRARY nexus_blake2_reference)
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/blake2-config")
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/blake2-config/config.h" "/* Native x64 reference build; no autotools/SIMD dispatch. */\n#define NATIVE_LITTLE_ENDIAN 1\n")
+target_include_directories(nexus_blake2_reference PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/blake2-config")
+target_compile_definitions(nexus_blake2_reference PRIVATE SUFFIX=)

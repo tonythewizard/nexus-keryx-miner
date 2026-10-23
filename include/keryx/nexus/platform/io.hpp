@@ -55,6 +55,23 @@ class LocalMemory {
   void* value{};
   ~LocalMemory() { if(value) LocalFree(value); }
 };
+inline bool private_descriptor(LocalMemory& descriptor) {
+  HANDLE token{};
+  if(!OpenProcessToken(GetCurrentProcess(),TOKEN_QUERY,&token)) return false;
+  DWORD size{}; GetTokenInformation(token,TokenUser,nullptr,0,&size);
+  std::string storage(size,'\0');
+  bool ok=GetTokenInformation(token,TokenUser,storage.data(),size,&size)!=FALSE;
+  CloseHandle(token);
+  if(!ok) return false;
+  LocalMemory sid_text;
+  if(!ConvertSidToStringSidW(reinterpret_cast<TOKEN_USER*>(storage.data())->User.Sid,
+    reinterpret_cast<LPWSTR*>(&sid_text.value))) return false;
+  const std::wstring acl=L"D:P(A;;FA;;;"+std::wstring(static_cast<wchar_t*>(sid_text.value))+L")(A;;FA;;;SY)";
+  if(!ConvertStringSecurityDescriptorToSecurityDescriptorW(
+    acl.c_str(),SDDL_REVISION_1,
+    reinterpret_cast<PSECURITY_DESCRIPTOR*>(&descriptor.value),nullptr)) return false;
+  return true;
+}
 inline bool owned_private(HANDLE file) {
   HANDLE token{};
   if(!OpenProcessToken(GetCurrentProcess(),TOKEN_QUERY,&token)) return false;
@@ -95,20 +112,7 @@ inline int open(const std::filesystem::path& path,int flags,int mode=0600) {
   if(flags&_O_CREAT) {
     // Protected DACL: the owner and SYSTEM only. Existing files retain their
     // ACL and must pass owned_private at the relevant authorization boundary.
-    HANDLE token{};
-    if(!OpenProcessToken(GetCurrentProcess(),TOKEN_QUERY,&token)) return error();
-    DWORD size{}; GetTokenInformation(token,TokenUser,nullptr,0,&size);
-    std::string storage(size,'\0');
-    bool ok=GetTokenInformation(token,TokenUser,storage.data(),size,&size)!=FALSE;
-    CloseHandle(token);
-    if(!ok) return error();
-    LocalMemory sid_text;
-    if(!ConvertSidToStringSidW(reinterpret_cast<TOKEN_USER*>(storage.data())->User.Sid,
-        reinterpret_cast<LPWSTR*>(&sid_text.value))) return error();
-    const std::wstring acl=L"D:P(A;;FA;;;"+std::wstring(static_cast<wchar_t*>(sid_text.value))+L")(A;;FA;;;SY)";
-    if(!ConvertStringSecurityDescriptorToSecurityDescriptorW(
-        acl.c_str(),SDDL_REVISION_1,
-        reinterpret_cast<PSECURITY_DESCRIPTOR*>(&descriptor.value),nullptr)) return error();
+    if(!private_descriptor(descriptor)) return error();
     security.lpSecurityDescriptor=descriptor.value;
   }
   DWORD attributes=FILE_ATTRIBUTE_NORMAL|FILE_FLAG_OPEN_REPARSE_POINT;

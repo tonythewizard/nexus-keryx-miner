@@ -4,6 +4,7 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include "keryx/nexus/platform/io.hpp"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -112,9 +113,12 @@ class WindowsVerifierProcess final {
     static std::atomic_uint64_t sequence{};
     const auto name=L"\\\\.\\pipe\\nexus-verifier-"+std::to_wstring(GetCurrentProcessId())+L"-"+
         std::to_wstring(++sequence);
+    io::LocalMemory descriptor;
+    if(!io::private_descriptor(descriptor))throw std::runtime_error("Private pipe security unavailable");
+    SECURITY_ATTRIBUTES parent_security{sizeof(parent_security),descriptor.value,FALSE};
     parent.reset(CreateNamedPipeW(name.c_str(),(parent_reads?PIPE_ACCESS_INBOUND:PIPE_ACCESS_OUTBOUND)|
         FILE_FLAG_OVERLAPPED|FILE_FLAG_FIRST_PIPE_INSTANCE,
-        PIPE_TYPE_BYTE|PIPE_WAIT|PIPE_REJECT_REMOTE_CLIENTS,1,65536,65536,0,nullptr));
+        PIPE_TYPE_BYTE|PIPE_WAIT|PIPE_REJECT_REMOTE_CLIENTS,1,65536,65536,0,&parent_security));
     if(!parent)throw std::runtime_error("Cannot create private verifier pipe");
     SECURITY_ATTRIBUTES security{sizeof(security),nullptr,TRUE};
     child.reset(CreateFileW(name.c_str(),parent_reads?GENERIC_WRITE:GENERIC_READ,0,&security,OPEN_EXISTING,0,nullptr));
