@@ -89,7 +89,8 @@ strict streaming uses aligned unbuffered I/O.
 Install Visual Studio 2022 with Desktop development with C++, CMake 3.25+,
 Python 3.11+, Git and Rust 1.88+. Build dependencies are pinned in
 `tools/windows/vcpkg.json`; the workflow pins the vcpkg checkout too. The overlay
-triplets build Release dependencies only. Host code generators use the same
+triplets build Release dependencies only and compile Windows CMake dependencies
+in C++20, matching the worker and avoiding Protobuf/MSVC ABI mismatches. Host code generators use the same
 triplet, avoiding duplicate Debug and dynamic-library dependency builds.
 
 ```powershell

@@ -174,6 +174,28 @@ endif()
 
 if(NEXUS_ENABLE_GRPC)
   find_package(Protobuf CONFIG REQUIRED)
+  if(MSVC)
+    # Catch mixed C++17/C++20 Protobuf packages before compiling the worker.
+    include(CMakePushCheckState)
+    include(CheckCXXSourceCompiles)
+    cmake_push_check_state(RESET)
+    set(nexus_previous_try_configuration "${CMAKE_TRY_COMPILE_CONFIGURATION}")
+    set(CMAKE_TRY_COMPILE_CONFIGURATION Release)
+    set(CMAKE_REQUIRED_LIBRARIES protobuf::libprotobuf)
+    unset(NEXUS_PROTOBUF_CXX20_LINKS CACHE)
+    check_cxx_source_compiles("
+#include <google/protobuf/message_lite.h>
+int main() {
+  const void* volatile empty = &google::protobuf::internal::fixed_address_empty_string;
+  return empty == nullptr;
+}
+" NEXUS_PROTOBUF_CXX20_LINKS)
+    set(CMAKE_TRY_COMPILE_CONFIGURATION "${nexus_previous_try_configuration}")
+    cmake_pop_check_state()
+    if(NOT NEXUS_PROTOBUF_CXX20_LINKS)
+      message(FATAL_ERROR "Protobuf ABI does not match MSVC C++20. Rebuild dependencies using tools/cmake/triplets/x64-windows-static-md.cmake.")
+    endif()
+  endif()
   find_package(gRPC CONFIG REQUIRED)
   find_package(CURL REQUIRED)
   find_package(ZLIB REQUIRED)

@@ -17,7 +17,7 @@ jobs:
     name: Windows x64
     needs: source
     runs-on: windows-2022
-    timeout-minutes: 120
+    timeout-minutes: 180
     env:
       VCPKG_DEFAULT_TRIPLET: x64-windows-static-md
       VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.local/vcpkg-cache
