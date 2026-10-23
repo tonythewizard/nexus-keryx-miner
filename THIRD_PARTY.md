@@ -14,16 +14,22 @@ licenses and notices. Do not replace or remove them with the project license.
 | `proto/current/` | Upstream wire definitions and `VERIFIABLE_INFERENCE_UPSTREAM.json` |
 | `ai-response-bridge/assets/trace-manifests/` | Text-encoded protocol manifests; `UPSTREAM.json` |
 
-License filenames are retained from the imported source. The files named
-`LICENSE-MIT` in the miner and trace directories, and
-`consensus/RESIDENT_KERNEL_LICENSE-MIT`, actually contain the Apache License
-2.0 text, identical to the retained `LICENSE-APACHE` files. Their names alone
-do not establish an MIT licensing option. This filename/content mismatch also
-exists in the upstream miner at commit
-`f2561aedeb649da7b2c46fc4e845e487c9a7d9e5`; its Cargo manifest declares
-`MIT/Apache-2.0`, and the retained Apache 2.0 text provides that licensing path.
-The inference and verifiable-inference license files contain the ISC license.
-Preserve these notices alongside the license for this project's contributions.
+### Imported license filenames
+
+The imported `LICENSE-MIT` files under `vendor/keryx-miner-v057/` and
+`vendor/keryx-trace-abi6/`, as well as
+`consensus/RESIDENT_KERNEL_LICENSE-MIT`, contain **Apache License 2.0** text,
+not MIT license text. The names have been preserved for upstream traceability;
+they must not be cited as evidence that those copies carry an MIT license.
+The same mismatch appears in upstream miner commit
+`f2561aedeb649da7b2c46fc4e845e487c9a7d9e5`. Its Cargo manifest declares
+`MIT/Apache-2.0`, but the actual retained notices provide the Apache 2.0 text.
+The inference and verifiable-inference `LICENSE` files contain ISC terms.
+
+Do not rewrite imported notices or assume that the project's GPL-3.0-only
+license replaces third-party terms. Before packaging binaries, review the
+applicable notices and obligations for the exact sources and dependency
+versions used in that build.
 
 The independent oracle needs the unmodified public Keryx node source at commit
 `70ed12af172ac8dab9004b6ef11848f581b2a060`. Fetch it into ignored `_deps/`
