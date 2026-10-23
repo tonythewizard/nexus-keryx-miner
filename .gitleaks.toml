@@ -1,0 +1,15 @@
+title = "Nexus Keryx Miner secret scanning"
+[extend]
+useDefault = true
+
+# These exact non-secret expressions are false positives of generic-api-key.
+# No file, folder, hash value or fixture address is exempted from scanning.
+[[rules]]
+id = "generic-api-key"
+[[rules.allowlists]]
+description = "An artifact digest assignment and a llama metadata key"
+regexTarget = "line"
+regexes = [
+  '''^\s*nexus_agent_api\.AUDIT_SHA = '[0-9a-f]{64}'\s*$''',
+  '''^\s*std::strncpy\(overrides\[0\]\.key, "glm4\.rope\.dimension_count", sizeof\(overrides\[0\]\.key\) - 1\);\s*$''',
+]

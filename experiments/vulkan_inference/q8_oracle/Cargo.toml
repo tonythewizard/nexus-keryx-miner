@@ -1,0 +1,7 @@
+[package]
+name = "nexus-vulkan-q8-oracle"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+keryx-verifiable-inference = { path = "../../../vendor/keryx-verifiable-inference" }

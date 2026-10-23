@@ -1,0 +1,35 @@
+{
+  "repository": "https://github.com/Keryx-Labs/keryx-miner",
+  "commit": "f2561aedeb649da7b2c46fc4e845e487c9a7d9e5",
+  "previous_commit": "dad77e8e31f5e75cb69dd490a444e8e792a66c04",
+  "files": {
+    "verifiable-inference/Cargo.toml": "3b9d2cbd6468ae3eca412cfd1fc71d98e8d3e2c6c5fadfa08808050404005b03",
+    "verifiable-inference/src/answer.rs": "6accc376fcf18e25106b4a3625b46c9b158e5f136d88fd1bfb1438595ba130d3",
+    "verifiable-inference/src/block_task.rs": "abb16e78603b6c01efec7e5a41677ae3589f302a1e0ac74a09aa681c410c2ee2",
+    "verifiable-inference/src/chain.rs": "28d45d2084ef825a79a36c95cabb5d9ad568413879b8d644fbeb1e1980c6cd96",
+    "verifiable-inference/src/chainkit.rs": "3bd0ae2bc4c4c8cc721560fa4bfacdeeb496f2384f2555147196c4e9378c2dec",
+    "verifiable-inference/src/dot.rs": "30e4226cd1e2908ed20abcdded182e24fdc81e0778bc3757674f9cf4b44613ab",
+    "verifiable-inference/src/draw.rs": "188615bb6448e14047e4fb81b1d3b18f50595521001f36d03ecdaaa8a9e0324e",
+    "verifiable-inference/src/f16.rs": "4c9cc44a80c643d1e93f344aac23f6baa5811089624f650171ced6745823bdf7",
+    "verifiable-inference/src/lib.rs": "0cadd530a44b59490a415ca6172a455bffd5602ec814ef44ffa0e02df7999634",
+    "verifiable-inference/src/manifest.rs": "ac96f50930ae88c04be178ef178297c09e2436d5c7c67723f7e3a22f2e0779ee",
+    "verifiable-inference/src/merkle.rs": "8bce6266f139d23adebcb2ffb5fc6450ce2ffff17efd6bd1eb65ecc46d890d5c",
+    "verifiable-inference/src/opening.rs": "6aab463eadc19c1030868ec768caf639b40c748b1538bd7b78bd503e62d0b957",
+    "verifiable-inference/src/prefix.rs": "c0b4aef0efca5d01c01b1313a34e2d4be56588f52ead45ee4eb87b004c9de8ef",
+    "verifiable-inference/src/q8.rs": "0ca99bb235b28ce1499ca54e0f1a8f00f7be2bc04ce9a80bd8cf4685bd1c0c10",
+    "verifiable-inference/src/quant.rs": "45e11073da42b30810386bf447cb27bad525ddf41e7278d2059ac569daf9f4b6",
+    "verifiable-inference/src/shape.rs": "94f7e7cf44dbf9c5f16c667ce931b1ebaff723a7acbaf742222868aafdd5be78",
+    "verifiable-inference/src/testkit.rs": "5dd10d9fb05133dbe1f4c2f0ae0e3997a4fd5e31597e4f084eba2c78400bc9f9",
+    "verifiable-inference/src/verify.rs": "2446e1a6be35ad9df98f92ad33403b4078fdcc38573f060b0000bc93fb3df252"
+  },
+  "local_patches": {
+    "src/lib.rs": {
+      "purpose": "Expose upstream testkit/chainkit to bridge CPU fixtures; no verifier algorithm changes",
+      "sha256": "7fd4f037f4b6acc06d45f026c62e626660f7a71f6afafda2f69f301b82755634"
+    },
+    "Cargo.toml": {
+      "purpose": "Expose upstream testkit/chainkit to bridge CPU fixtures; no verifier algorithm changes",
+      "sha256": "3b9d2cbd6468ae3eca412cfd1fc71d98e8d3e2c6c5fadfa08808050404005b03"
+    }
+  }
+}

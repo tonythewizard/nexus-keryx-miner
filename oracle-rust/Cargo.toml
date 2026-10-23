@@ -1,0 +1,11 @@
+[package]
+name = "nexus-m21-oracle"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+keryx-consensus-core = { path = "../_deps/keryx-node/consensus/core" }
+keryx-math = { path = "../_deps/keryx-node/math" }
+blake3 = "1"
+libc = "0.2"
+borsh = { version = "1.5.1", features = ["derive"] }

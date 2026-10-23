@@ -1,0 +1,78 @@
+{
+  "ai-response-bridge/assets/trace-manifests/chain-tier0.bin": {
+    "bytes": 31463,
+    "sha256": "e36c05a9b56c5aee7f6e72d50c572a3169fdb73491761c7e2e708eb78acb04e7"
+  },
+  "ai-response-bridge/assets/trace-manifests/chain-tier1.bin": {
+    "bytes": 48351,
+    "sha256": "c53f6f59b33b7d36f16d39b7baaa1b3e7a19f2627e2999a80e2e5aa0a48cd23d"
+  },
+  "ai-response-bridge/assets/trace-manifests/chain-tier2.bin": {
+    "bytes": 50816,
+    "sha256": "d8c361ed94add2f85387140281816964dffa6848e862e078deb09a851618028b"
+  },
+  "ai-response-bridge/assets/trace-manifests/chain-tier3.bin": {
+    "bytes": 62783,
+    "sha256": "a0a3abce8d36e358cc826fc0a2f11ea6c1659206a4e08c7e047d37004bd768a5"
+  },
+  "ai-response-bridge/assets/trace-manifests/chain-tier4.bin": {
+    "bytes": 48649,
+    "sha256": "96394c7df973bb7f5d5965fbf96414f4d3fef449adb045cfb3cb107e61adfc60"
+  },
+  "ai-response-bridge/assets/trace-manifests/tier0.bin": {
+    "bytes": 19689,
+    "sha256": "987832f347461bf001a83d471eb5797b5155daac56b1694723b6405e6d75fe6b"
+  },
+  "ai-response-bridge/assets/trace-manifests/tier1.bin": {
+    "bytes": 27909,
+    "sha256": "e628591910eea3f580349b9530ef946db010957d13b051ea8bfdf2b87a74f65e"
+  },
+  "ai-response-bridge/assets/trace-manifests/tier2.bin": {
+    "bytes": 25862,
+    "sha256": "edd8690b735bbe6b9a8c4c9dec3059b34e0023edbe0be7780763083ab86fe504"
+  },
+  "ai-response-bridge/assets/trace-manifests/tier3.bin": {
+    "bytes": 39217,
+    "sha256": "b01e4dbbad9176ab647707153032b1fd9f3c709c18c2a57685767d0cbf41f169"
+  },
+  "nexus-ui-desktop/src-tauri/icons/icon.png": {
+    "bytes": 2937,
+    "sha256": "fb0928665641f5bdc2cae9d7e18e1a619b868b99dee83354a6b4e0eba8cd9eaf"
+  },
+  "vendor/keryx-trace-abi6/assets/trace-manifests/chain-tier0.bin": {
+    "bytes": 31463,
+    "sha256": "e36c05a9b56c5aee7f6e72d50c572a3169fdb73491761c7e2e708eb78acb04e7"
+  },
+  "vendor/keryx-trace-abi6/assets/trace-manifests/chain-tier1.bin": {
+    "bytes": 48351,
+    "sha256": "c53f6f59b33b7d36f16d39b7baaa1b3e7a19f2627e2999a80e2e5aa0a48cd23d"
+  },
+  "vendor/keryx-trace-abi6/assets/trace-manifests/chain-tier2.bin": {
+    "bytes": 50816,
+    "sha256": "d8c361ed94add2f85387140281816964dffa6848e862e078deb09a851618028b"
+  },
+  "vendor/keryx-trace-abi6/assets/trace-manifests/chain-tier3.bin": {
+    "bytes": 62783,
+    "sha256": "a0a3abce8d36e358cc826fc0a2f11ea6c1659206a4e08c7e047d37004bd768a5"
+  },
+  "vendor/keryx-trace-abi6/assets/trace-manifests/chain-tier4.bin": {
+    "bytes": 48649,
+    "sha256": "96394c7df973bb7f5d5965fbf96414f4d3fef449adb045cfb3cb107e61adfc60"
+  },
+  "vendor/keryx-trace-abi6/assets/trace-manifests/tier0.bin": {
+    "bytes": 19689,
+    "sha256": "987832f347461bf001a83d471eb5797b5155daac56b1694723b6405e6d75fe6b"
+  },
+  "vendor/keryx-trace-abi6/assets/trace-manifests/tier1.bin": {
+    "bytes": 27909,
+    "sha256": "e628591910eea3f580349b9530ef946db010957d13b051ea8bfdf2b87a74f65e"
+  },
+  "vendor/keryx-trace-abi6/assets/trace-manifests/tier2.bin": {
+    "bytes": 25862,
+    "sha256": "edd8690b735bbe6b9a8c4c9dec3059b34e0023edbe0be7780763083ab86fe504"
+  },
+  "vendor/keryx-trace-abi6/assets/trace-manifests/tier3.bin": {
+    "bytes": 39217,
+    "sha256": "b01e4dbbad9176ab647707153032b1fd9f3c709c18c2a57685767d0cbf41f169"
+  }
+}

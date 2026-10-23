@@ -1,0 +1,221 @@
+; SPIR-V
+; Version: 1.5
+; Generator: Khronos Glslang Reference Front End; 11
+; Bound: 345
+; Schema: 0
+               OpCapability Shader
+               OpCapability Int64
+               OpCapability PhysicalStorageBufferAddresses
+          %1 = OpExtInstImport "GLSL.std.450"
+               OpMemoryModel PhysicalStorageBuffer64 GLSL450
+               OpEntryPoint GLCompute %4 "main" %41 %50 %170
+               OpExecutionMode %4 LocalSize 128 1 1
+               OpSource GLSL 450
+               OpSourceExtension "GL_EXT_buffer_reference"
+               OpSourceExtension "GL_EXT_shader_explicit_arithmetic_types_int32"
+               OpSourceExtension "GL_EXT_shader_explicit_arithmetic_types_int64"
+               OpName %4 "main"
+               OpName %41 "gl_GlobalInvocationID"
+               OpName %48 "PushConstants"
+               OpMemberName %48 0 "bank0_addr"
+               OpMemberName %48 1 "bank1_addr"
+               OpMemberName %48 2 "ntiles"
+               OpMemberName %48 3 "split_tiles"
+               OpName %50 ""
+               OpName %90 "ModelBank128"
+               OpMemberName %90 0 "data"
+               OpName %168 "TileFoldsBuffer"
+               OpMemberName %168 0 "tile_folds"
+               OpName %170 ""
+               OpDecorate %41 BuiltIn GlobalInvocationId
+               OpDecorate %48 Block
+               OpMemberDecorate %48 0 Offset 0
+               OpMemberDecorate %48 1 Offset 8
+               OpMemberDecorate %48 2 Offset 16
+               OpMemberDecorate %48 3 Offset 24
+               OpDecorate %89 ArrayStride 16
+               OpDecorate %90 Block
+               OpMemberDecorate %90 0 NonWritable
+               OpMemberDecorate %90 0 Offset 0
+               OpDecorate %167 ArrayStride 8
+               OpDecorate %168 Block
+               OpMemberDecorate %168 0 NonReadable
+               OpMemberDecorate %168 0 Offset 0
+               OpDecorate %170 NonReadable
+               OpDecorate %170 Binding 0
+               OpDecorate %170 DescriptorSet 0
+               OpDecorate %177 BuiltIn WorkgroupSize
+          %2 = OpTypeVoid
+          %3 = OpTypeFunction %2
+          %6 = OpTypeInt 64 0
+         %13 = OpTypeInt 32 1
+         %14 = OpConstant %13 30
+         %18 = OpConstant %6 13787848793156543929
+         %22 = OpConstant %13 27
+         %26 = OpConstant %6 10723151780598845931
+         %30 = OpConstant %13 31
+         %38 = OpTypeInt 32 0
+         %39 = OpTypeVector %38 3
+         %40 = OpTypePointer Input %39
+         %41 = OpVariable %40 Input
+         %42 = OpConstant %38 0
+         %43 = OpTypePointer Input %38
+         %48 = OpTypeStruct %6 %6 %6 %6
+         %49 = OpTypePointer PushConstant %48
+         %50 = OpVariable %49 PushConstant
+         %51 = OpConstant %13 2
+         %52 = OpTypePointer PushConstant %6
+         %55 = OpTypeBool
+         %62 = OpConstant %13 3
+         %69 = OpConstant %13 0
+         %73 = OpConstant %6 1024
+         %77 = OpConstant %13 1
+               OpTypeForwardPointer %87 PhysicalStorageBuffer
+         %88 = OpTypeVector %38 4
+         %89 = OpTypeRuntimeArray %88
+         %90 = OpTypeStruct %89
+         %87 = OpTypePointer PhysicalStorageBuffer %90
+         %98 = OpTypePointer PhysicalStorageBuffer %88
+        %116 = OpConstant %38 1
+        %167 = OpTypeRuntimeArray %6
+        %168 = OpTypeStruct %167
+        %169 = OpTypePointer StorageBuffer %168
+        %170 = OpVariable %169 StorageBuffer
+        %174 = OpTypePointer StorageBuffer %6
+        %176 = OpConstant %38 128
+        %177 = OpConstantComposite %39 %176 %116 %116
+          %4 = OpFunction %2 None %3
+          %5 = OpLabel
+               OpSelectionMerge %178 None
+               OpSwitch %42 %179
+        %179 = OpLabel
+         %44 = OpAccessChain %43 %41 %42
+         %45 = OpLoad %38 %44
+         %46 = OpUConvert %6 %45
+         %53 = OpAccessChain %52 %50 %51
+         %54 = OpLoad %6 %53
+         %56 = OpUGreaterThanEqual %55 %46 %54
+               OpSelectionMerge %58 None
+               OpBranchConditional %56 %57 %58
+         %57 = OpLabel
+               OpBranch %178
+         %58 = OpLabel
+         %63 = OpAccessChain %52 %50 %62
+         %64 = OpLoad %6 %63
+         %65 = OpULessThan %55 %46 %64
+               OpSelectionMerge %68 None
+               OpBranchConditional %65 %67 %76
+         %67 = OpLabel
+         %70 = OpAccessChain %52 %50 %69
+         %71 = OpLoad %6 %70
+         %74 = OpIMul %6 %46 %73
+         %75 = OpIAdd %6 %71 %74
+               OpBranch %68
+         %76 = OpLabel
+         %78 = OpAccessChain %52 %50 %77
+         %79 = OpLoad %6 %78
+         %83 = OpISub %6 %46 %64
+         %84 = OpIMul %6 %83 %73
+         %85 = OpIAdd %6 %79 %84
+               OpBranch %68
+         %68 = OpLabel
+        %344 = OpPhi %6 %75 %67 %85 %76
+         %94 = OpConvertUToPtr %87 %344
+         %99 = OpAccessChain %98 %94 %69 %69
+        %100 = OpLoad %88 %99 Aligned 16
+        %103 = OpAccessChain %98 %94 %69 %77
+        %104 = OpLoad %88 %103 Aligned 16
+        %110 = OpCompositeExtract %38 %100 0
+        %111 = OpUConvert %6 %110
+        %187 = OpShiftRightLogical %6 %111 %14
+        %189 = OpBitwiseXor %6 %111 %187
+        %191 = OpIMul %6 %189 %18
+        %193 = OpShiftRightLogical %6 %191 %22
+        %195 = OpBitwiseXor %6 %191 %193
+        %197 = OpIMul %6 %195 %26
+        %199 = OpShiftRightLogical %6 %197 %30
+        %201 = OpBitwiseXor %6 %197 %199
+        %118 = OpCompositeExtract %38 %100 1
+        %119 = OpUConvert %6 %118
+        %120 = OpBitwiseXor %6 %201 %119
+        %206 = OpShiftRightLogical %6 %120 %14
+        %208 = OpBitwiseXor %6 %120 %206
+        %210 = OpIMul %6 %208 %18
+        %212 = OpShiftRightLogical %6 %210 %22
+        %214 = OpBitwiseXor %6 %210 %212
+        %216 = OpIMul %6 %214 %26
+        %218 = OpShiftRightLogical %6 %216 %30
+        %220 = OpBitwiseXor %6 %216 %218
+        %126 = OpCompositeExtract %38 %100 2
+        %127 = OpUConvert %6 %126
+        %128 = OpBitwiseXor %6 %220 %127
+        %225 = OpShiftRightLogical %6 %128 %14
+        %227 = OpBitwiseXor %6 %128 %225
+        %229 = OpIMul %6 %227 %18
+        %231 = OpShiftRightLogical %6 %229 %22
+        %233 = OpBitwiseXor %6 %229 %231
+        %235 = OpIMul %6 %233 %26
+        %237 = OpShiftRightLogical %6 %235 %30
+        %239 = OpBitwiseXor %6 %235 %237
+        %134 = OpCompositeExtract %38 %100 3
+        %135 = OpUConvert %6 %134
+        %136 = OpBitwiseXor %6 %239 %135
+        %244 = OpShiftRightLogical %6 %136 %14
+        %246 = OpBitwiseXor %6 %136 %244
+        %248 = OpIMul %6 %246 %18
+        %250 = OpShiftRightLogical %6 %248 %22
+        %252 = OpBitwiseXor %6 %248 %250
+        %254 = OpIMul %6 %252 %26
+        %256 = OpShiftRightLogical %6 %254 %30
+        %258 = OpBitwiseXor %6 %254 %256
+        %141 = OpCompositeExtract %38 %104 0
+        %142 = OpUConvert %6 %141
+        %143 = OpBitwiseXor %6 %258 %142
+        %263 = OpShiftRightLogical %6 %143 %14
+        %265 = OpBitwiseXor %6 %143 %263
+        %267 = OpIMul %6 %265 %18
+        %269 = OpShiftRightLogical %6 %267 %22
+        %271 = OpBitwiseXor %6 %267 %269
+        %273 = OpIMul %6 %271 %26
+        %275 = OpShiftRightLogical %6 %273 %30
+        %277 = OpBitwiseXor %6 %273 %275
+        %148 = OpCompositeExtract %38 %104 1
+        %149 = OpUConvert %6 %148
+        %150 = OpBitwiseXor %6 %277 %149
+        %282 = OpShiftRightLogical %6 %150 %14
+        %284 = OpBitwiseXor %6 %150 %282
+        %286 = OpIMul %6 %284 %18
+        %288 = OpShiftRightLogical %6 %286 %22
+        %290 = OpBitwiseXor %6 %286 %288
+        %292 = OpIMul %6 %290 %26
+        %294 = OpShiftRightLogical %6 %292 %30
+        %296 = OpBitwiseXor %6 %292 %294
+        %155 = OpCompositeExtract %38 %104 2
+        %156 = OpUConvert %6 %155
+        %157 = OpBitwiseXor %6 %296 %156
+        %301 = OpShiftRightLogical %6 %157 %14
+        %303 = OpBitwiseXor %6 %157 %301
+        %305 = OpIMul %6 %303 %18
+        %307 = OpShiftRightLogical %6 %305 %22
+        %309 = OpBitwiseXor %6 %305 %307
+        %311 = OpIMul %6 %309 %26
+        %313 = OpShiftRightLogical %6 %311 %30
+        %315 = OpBitwiseXor %6 %311 %313
+        %162 = OpCompositeExtract %38 %104 3
+        %163 = OpUConvert %6 %162
+        %164 = OpBitwiseXor %6 %315 %163
+        %320 = OpShiftRightLogical %6 %164 %14
+        %322 = OpBitwiseXor %6 %164 %320
+        %324 = OpIMul %6 %322 %18
+        %326 = OpShiftRightLogical %6 %324 %22
+        %328 = OpBitwiseXor %6 %324 %326
+        %330 = OpIMul %6 %328 %26
+        %332 = OpShiftRightLogical %6 %330 %30
+        %334 = OpBitwiseXor %6 %330 %332
+        %172 = OpUConvert %38 %46
+        %175 = OpAccessChain %174 %170 %69 %172
+               OpStore %175 %334
+               OpBranch %178
+        %178 = OpLabel
+               OpReturn
+               OpFunctionEnd

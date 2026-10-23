@@ -1,0 +1,16 @@
+{
+  "origin": "Disassembled verbatim from the user-provided ccac056 embedded SPIR-V. Original updated GLSL was not located in persistent workspace searches. This is not a claim of recovered original GLSL.",
+  "target_env": "vulkan1.2",
+  "modules": {
+    "pom_v4_bda_resident_spv": {
+      "sha256": "af7f545b81e8520db5d929fe9f1a8e467f94da3936360020e517a04b058a3956",
+      "header_hex": "03022307000501000b0008005619000000000000",
+      "source": "pom_v4_bda_resident_spv.spvasm"
+    },
+    "pom_v4_bda_prepare_folds_spv": {
+      "sha256": "9299e77c9c1bee574dfc44dcb82668be5f564817195494951159a8b31c83e461",
+      "header_hex": "03022307000501000b0008005901000000000000",
+      "source": "pom_v4_bda_prepare_folds_spv.spvasm"
+    }
+  }
+}

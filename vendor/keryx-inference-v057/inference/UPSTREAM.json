@@ -1,0 +1,14 @@
+{
+  "repository": "https://github.com/Keryx-Labs/keryx-miner",
+  "commit": "f2561aedeb649da7b2c46fc4e845e487c9a7d9e5",
+  "previous_commit": "dad77e8e31f5e75cb69dd490a444e8e792a66c04",
+  "files": {
+    "inference/Cargo.toml": "e8d5719c609c450748dbc31fdb179a856058a8ff1b4a7b74b90970805464d961",
+    "inference/src/ai_payload.rs": "c40c6b2fd34be5d1c70d8685d7c2aa261bfaf53daf04fd018e602f7b7dadb957",
+    "inference/src/fraud_proof.rs": "b732ec049ea3959f2ef409a42f6436cb4bf2c23a60d78ed24c5fcadec704bef5",
+    "inference/src/lib.rs": "5888970fdbd6ce4cd42a9eadeac7c5669145a529650fba699421d8d00b7538ea",
+    "inference/src/model_fixed.rs": "38e101ec0db476088126854a87d58a8d129f0a40257b539db1b9267a6429cd29",
+    "inference/src/private.rs": "ef352d73451ef65c03f4a29d0bb9cfb809593b782f1156755a6824ee59d9f9ed",
+    "inference/src/task.rs": "c2bc98aaee01d14b504c3bbe52b0556424057b8a932c17026071c56e6e31edcd"
+  }
+}

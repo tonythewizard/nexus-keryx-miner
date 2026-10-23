@@ -1,0 +1,9 @@
+{
+  "wire_fields_source": "https://github.com/Keryx-Labs/keryx-miner",
+  "wire_fields_commit": "dad77e8e31f5e75cb69dd490a444e8e792a66c04",
+  "base_local_commit": "4b15a96",
+  "base_local_sha256": "3884b468f7f496bfbd4cf41b384b73a113aadf2922f2c7d45e748b6c2236b53e",
+  "patched_sha256": "589d1250d14ce198a4b4dbcd3839d535fec08cf4a7889834d910395ea480868d",
+  "scope": "Additive selected-chain acceptance request, restore response, notification flag and accepted-transaction IDs only; other legacy schema fields remain unchanged.",
+  "validation": "tests/proto_wire_compat.py and chain_restore_wire_tests"
+}

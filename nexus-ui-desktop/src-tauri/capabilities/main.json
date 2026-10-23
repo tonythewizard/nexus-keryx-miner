@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main",
+  "description": "Local read-only Matrix presentation. No shell, filesystem, HTTP or miner controls.",
+  "windows": ["main"],
+  "permissions": []
+}

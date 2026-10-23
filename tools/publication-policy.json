@@ -1,0 +1,8 @@
+{
+  "repository": "tonythewizard/nexus-keryx-miner",
+  "visibility": "private",
+  "upstream_fixture_address_sha256": [
+    "850e992fe8f82c864af49d7b30291d20e8dc805694a7bbc0889af9b18bc912c2",
+    "b15bc5f721683113990175021f87b516082cced9f3885b2c978bdee0e1f61093"
+  ]
+}

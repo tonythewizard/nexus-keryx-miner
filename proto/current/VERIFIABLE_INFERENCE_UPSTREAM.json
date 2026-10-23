@@ -1,0 +1,8 @@
+{
+  "repository": "https://github.com/Keryx-Labs/keryx-miner",
+  "commit": "686e8691936d48f2931ffc3a23402335202b546c",
+  "source": "proto/rpc.proto",
+  "integration": "Add RpcBlockHeader.taskRoot as field 19 without replacing unrelated local node RPC extensions",
+  "wire_type": "string / length-delimited",
+  "mainnet_activation": "disabled (official u64::MAX gate)"
+}

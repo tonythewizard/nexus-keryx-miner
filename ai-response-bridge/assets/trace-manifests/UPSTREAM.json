@@ -1,0 +1,16 @@
+{
+  "repository": "https://github.com/Keryx-Labs/keryx-miner",
+  "commit": "686e8691936d48f2931ffc3a23402335202b546c",
+  "contents": "Small public protocol manifests, not GGUF models or operator state",
+  "files": {
+    "assets/trace-manifests/chain-tier0.bin": "e36c05a9b56c5aee7f6e72d50c572a3169fdb73491761c7e2e708eb78acb04e7",
+    "assets/trace-manifests/chain-tier1.bin": "c53f6f59b33b7d36f16d39b7baaa1b3e7a19f2627e2999a80e2e5aa0a48cd23d",
+    "assets/trace-manifests/chain-tier2.bin": "d8c361ed94add2f85387140281816964dffa6848e862e078deb09a851618028b",
+    "assets/trace-manifests/chain-tier3.bin": "a0a3abce8d36e358cc826fc0a2f11ea6c1659206a4e08c7e047d37004bd768a5",
+    "assets/trace-manifests/chain-tier4.bin": "96394c7df973bb7f5d5965fbf96414f4d3fef449adb045cfb3cb107e61adfc60",
+    "assets/trace-manifests/tier0.bin": "987832f347461bf001a83d471eb5797b5155daac56b1694723b6405e6d75fe6b",
+    "assets/trace-manifests/tier1.bin": "e628591910eea3f580349b9530ef946db010957d13b051ea8bfdf2b87a74f65e",
+    "assets/trace-manifests/tier2.bin": "edd8690b735bbe6b9a8c4c9dec3059b34e0023edbe0be7780763083ab86fe504",
+    "assets/trace-manifests/tier3.bin": "b01e4dbbad9176ab647707153032b1fd9f3c709c18c2a57685767d0cbf41f169"
+  }
+}

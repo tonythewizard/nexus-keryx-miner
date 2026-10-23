@@ -1,0 +1,44 @@
+name: Source gates
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  source-gates:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install pinned secret scanner
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .local/tools .local/tmp
+          export TMPDIR="$PWD/.local/tmp"
+          curl --fail --location --silent --show-error \
+            https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz \
+            -o .local/tools/gitleaks.tar.gz
+          echo '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  .local/tools/gitleaks.tar.gz' | sha256sum --check
+          tar -xzf .local/tools/gitleaks.tar.gz -C .local/tools gitleaks
+          echo "$PWD/.local/tools" >> "$GITHUB_PATH"
+      - name: Privacy, secrets and complete history
+        run: python3 tools/security_gate.py --history
+      - name: Publication regression tests
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 -m unittest discover -s tests/publication -v
+      - name: CPU policy checks without GPU initialization
+        shell: bash
+        run: |
+          set -euo pipefail
+          export TMPDIR="$PWD/.local/tmp"
+          for case in live_worker_config primary_vulkan_policy startup_readiness; do
+            c++ -std=c++20 -pthread -Iinclude "tests/${case}_test.cpp" -o ".local/${case}"
+            ".local/${case}"
+          done
+      - name: Desktop DOM checks
+        run: node --test tests/desktop/tauri_dom_test.cjs

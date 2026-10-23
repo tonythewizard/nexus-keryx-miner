@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Nexus - 0.0.3</title>
+    <link rel="icon" href="nexus.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="matrix.css" />
+    <script src="desktop.js" defer></script>
+  </head>
+  <body>
+    <header>
+      <div class="identity">
+        <strong>N E X U S</strong><small>KERYX MINER</small>
+      </div>
+      <div class="headline">
+        <span id="ram">RAM N/A</span><span> · </span
+        ><span id="version">v0.0.3</span><span> · </span
+        ><span>MATRIX DESKTOP</span>
+      </div>
+      <button id="minimize">Minimize to tray</button>
+    </header>
+    <div id="status" role="status">Connecting to native telemetry…</div>
+    <nav id="tabs" aria-label="Miner pages"></nav>
+    <main>
+      <div id="panels"></div>
+      <div id="log-toolbar" hidden>
+        <label
+          >Event filter
+          <select id="log-filter">
+            <option>ALL</option>
+            <option>AI</option>
+            <option>SUBMIT</option>
+            <option>JOB</option>
+            <option>ERROR</option>
+          </select></label
+        >
+      </div>
+    </main>
+    <div id="notice" role="status" hidden></div>
+    <dialog id="edit-dialog">
+      <form id="edit-form">
+        <h2 id="edit-title"></h2>
+        <div id="edit-fields"></div>
+        <div id="edit-preview" hidden></div>
+        <p id="edit-error" class="error"></p>
+        <div class="dialog-buttons">
+          <button type="button" id="edit-cancel">Cancel</button
+          ><button type="submit">Apply</button>
+        </div>
+      </form>
+    </dialog>
+  </body>
+</html>
