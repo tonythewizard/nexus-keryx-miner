@@ -55,7 +55,7 @@ def violations(name, data, mode="100644"):
         problems.append("private/generated path")
     if name not in ROOT_FILES and (len(p.parts) < 2 or p.parts[0] not in AREAS):
         problems.append("unapproved source area")
-    if (p.suffix not in SUFFIXES and p.name not in ("CMakeLists.txt", "LICENSE", "LICENSE-APACHE", "LICENSE-MIT", "RESIDENT_KERNEL_LICENSE-MIT", ".gitignore", "pre-commit", "pre-push")) and name not in ROOT_FILES:
+    if (p.suffix not in SUFFIXES and not (p.suffix == ".patch" and p.parts[0] == "vendor") and p.name not in ("CMakeLists.txt", "LICENSE", "LICENSE-APACHE", "LICENSE-MIT", "RESIDENT_KERNEL_LICENSE-MIT", ".gitignore", "pre-commit", "pre-push")) and name not in ROOT_FILES:
         problems.append("unapproved file type")
     if len(data) > 2 * 1024 * 1024 or b"\0" in data:
         problems.append("binary or oversized file")

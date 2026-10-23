@@ -7,7 +7,7 @@ already attached to third-party source while choosing the project's license.
 | --- | --- |
 | `vendor/keryx-inference-v057/` | Keryx inference formats; `LICENSE`, `inference/UPSTREAM.json` |
 | `vendor/keryx-miner-v057/` | Escrow implementation and RPC definitions; `LICENSE-APACHE`, `LICENSE-MIT`, `proto/SELECTED_CHAIN_UPSTREAM.json` |
-| `vendor/keryx-trace-abi6/` | Trace formats, reference miner and wrapper source; `LICENSE-APACHE`, `LICENSE-MIT`, `UPSTREAM.json` |
+| `vendor/keryx-trace-abi6/` | Trace formats, reference miner, wrapper source and its canonical-trace build patch; `LICENSE-APACHE`, `LICENSE-MIT`, `UPSTREAM.json` |
 | `vendor/keryx-verifiable-inference/` | Trace codec/verifier; `LICENSE`, `UPSTREAM.json`, `SHAPE_UPSTREAM.json` |
 | `consensus/` | Resident-kernel notice in `RESIDENT_KERNEL_LICENSE-MIT` |
 | `proto/current/` | Upstream wire definitions and `VERIFIABLE_INFERENCE_UPSTREAM.json` |
