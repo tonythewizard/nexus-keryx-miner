@@ -4,5 +4,17 @@
   "upstream_fixture_address_sha256": [
     "850e992fe8f82c864af49d7b30291d20e8dc805694a7bbc0889af9b18bc912c2",
     "b15bc5f721683113990175021f87b516082cced9f3885b2c978bdee0e1f61093"
-  ]
+  ],
+  "public_screenshot_sha256": {
+    "docs/screenshots/01-overview.png": "b7844c64c797494d30510fb90192573e5724ecdf1d1ae4e2caca46317b4cd713",
+    "docs/screenshots/02-gpu.png": "fd1c890a8372160e466f460e19a10616bbfee2b8f6aaced365bd82d81bab8b78",
+    "docs/screenshots/03-ai-service.png": "97be5c58102c1f65244399f80f3915a7972ab6998d57c90088a416a641598b9a",
+    "docs/screenshots/04-escrow.png": "dd75816caf40dc8980b3fb22f387c858e10e4ac94f5f58861018b92a12d7cb68",
+    "docs/screenshots/05-log.png": "108d158617b3b603ff3ae57a8718add9e3dd54cf4dcde2b15325001a2ee0a8ce",
+    "docs/screenshots/06-wallet.png": "90be33af3d94ee67b187bf2663388b858e936e771c23ff5376939544ba3ac353",
+    "docs/screenshots/07-development.png": "06bb106f3f8a3c6d50fcc5e1bd565e637524f256ae36a7eb697f33364ba93866",
+    "docs/screenshots/08-setup.png": "b29dbee0ff256a90f6011f64620481333b7eb549192775a4bc9cff47a287f6d0",
+    "docs/screenshots/09-controls.png": "e80508d00d4b158390c6aa7cf2388446f3e6046caa9ba54ca9c7f38167ec9a2c",
+    "docs/screenshots/hero-overview.png": "d06ac8028a7450e39875d5905fd6c8ff12c0c34ca19c7226b4e5ff9ada7e4bb1"
+  }
 }
