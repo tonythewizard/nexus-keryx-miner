@@ -96,10 +96,11 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           & build/windows/bin/Release/nexus-consensus-test.exe build/windows/test-data/official-v4.bin build/windows/test-data/cpp-proof.bin
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          foreach ($mode in @('verify', 'reject-tile', 'reject-target', 'reject-tier')) {
-            & oracle-rust/target/release/nexus-m21-oracle.exe $mode build/windows/test-data/cpp-proof.bin
-            if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          }
+          & oracle-rust/target/release/nexus-m21-oracle.exe verify build/windows/test-data/cpp-proof.bin
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python tests/oracle_negative_suite.py oracle-rust/target/release/nexus-m21-oracle.exe `
+            build/windows/test-data/cpp-proof.bin build/windows/test-data
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Native header hashes and journal recovery
         shell: pwsh
         run: |
@@ -235,6 +236,8 @@ jobs:
             -DNEXUS_RUST_ORACLE="$PWD/oracle-rust/target/release/nexus-m21-oracle"
           cmake --build build/linux-cpu --parallel 2
           ctest --test-dir build/linux-cpu --output-on-failure
+          python3 tests/oracle_negative_suite.py oracle-rust/target/release/nexus-m21-oracle \
+            build/linux-cpu/test-data/cpp-proof.bin build/linux-cpu/test-data
       - name: Restore matching inference runtime
         id: runtimecache
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
