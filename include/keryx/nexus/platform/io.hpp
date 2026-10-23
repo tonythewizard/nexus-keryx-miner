@@ -117,7 +117,7 @@ inline int open(const std::filesystem::path& path,int flags,int mode=0600) {
   }
   DWORD attributes=FILE_ATTRIBUTE_NORMAL|FILE_FLAG_OPEN_REPARSE_POINT;
   if(directory) attributes|=FILE_FLAG_BACKUP_SEMANTICS;
-  HANDLE handle=CreateFileW(path.c_str(),access|READ_CONTROL,
+  HANDLE handle=CreateFileW(path.c_str(),access|READ_CONTROL|FILE_READ_ATTRIBUTES,
       FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,&security,creation,attributes,nullptr);
   if(handle==INVALID_HANDLE_VALUE) return error();
   FILE_ATTRIBUTE_TAG_INFO tag{};

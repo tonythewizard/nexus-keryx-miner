@@ -42,3 +42,6 @@ jobs:
           done
       - name: Desktop DOM checks
         run: node --test tests/desktop/tauri_dom_test.cjs
+
+      - name: Distribution boundaries and explicit launch policies
+        run: python3 -m unittest discover -s tests/distribution -v

@@ -23,7 +23,7 @@ ROOT_FILES = {"README.md", "devkit.md", "AGENTS.md", "SECURITY.md", "THIRD_PARTY
               "VERSION", "LICENSE", "CMakeLists.txt", ".gitignore", ".gitleaks.toml"}
 SUFFIXES = {".cpp", ".hpp", ".h", ".c", ".cu", ".cuh", ".rs", ".py", ".fish",
             ".sh", ".toml", ".lock", ".json", ".proto", ".html", ".css", ".js",
-            ".cjs", ".svg", ".spvasm", ".hex", ".md", ".txt", ".yml", ".yaml", ".inc", ".cmake", ".ps1"}
+            ".cjs", ".svg", ".spvasm", ".hex", ".md", ".txt", ".yml", ".yaml", ".inc", ".cmake", ".ps1", ".manifest"}
 FORBIDDEN_PARTS = {"state", "logs", "cache", "artifacts", "models", "handoff",
                    "agent-api", "node_modules", "target", "build", ".aws", ".codex", ".ssh", "_deps"}
 SYNTHETIC_UUID = "GPU-00000000-0000-0000-0000-000000000000"
