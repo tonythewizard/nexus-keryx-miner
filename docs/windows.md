@@ -89,7 +89,8 @@ strict streaming uses aligned unbuffered I/O.
 Install Visual Studio 2022 with Desktop development with C++, CMake 3.25+,
 Python 3.11+, Git and Rust 1.88+. Build dependencies are pinned in
 `tools/windows/vcpkg.json`; the workflow pins the vcpkg checkout too. The overlay
-triplets build Release dependencies only, avoiding an unused Debug toolchain.
+triplets build Release dependencies only. Host code generators use the same
+triplet, avoiding duplicate Debug and dynamic-library dependency builds.
 
 ```powershell
 git clone https://github.com/microsoft/vcpkg.git .local/vcpkg
@@ -98,7 +99,7 @@ git -C .local/vcpkg checkout 23b8a8e7409c2d6346114a88e834165bde79a51c
 cmake -S . -B build/windows -A x64 `
   -DCMAKE_TOOLCHAIN_FILE="$pwd/.local/vcpkg/scripts/buildsystems/vcpkg.cmake" `
   -DVCPKG_MANIFEST_DIR="$pwd/tools/windows" -DVCPKG_OVERLAY_TRIPLETS="$pwd/tools/cmake/triplets" `
-  -DVCPKG_TARGET_TRIPLET=x64-windows-static-md
+  -DVCPKG_TARGET_TRIPLET=x64-windows-static-md -DVCPKG_HOST_TRIPLET=x64-windows-static-md
 cmake --build build/windows --config Release --parallel 2
 ctest --test-dir build/windows -C Release --output-on-failure
 ```
