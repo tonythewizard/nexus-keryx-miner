@@ -22,6 +22,7 @@ def main():
     parser.add_argument('--runtime-dir', required=True, type=Path)
     parser.add_argument('--cuda-dir', required=True, type=Path)
     parser.add_argument('--crt-dir', type=Path)
+    parser.add_argument('--cuda-license', type=Path, help='Installed CUDA license when not at toolkit/EULA.txt')
     parser.add_argument('--inspector', type=Path, help='dumpbin.exe on Windows; readelf on Linux')
     parser.add_argument('--output', type=Path, default=ROOT / 'dist')
     args = parser.parse_args()
@@ -64,7 +65,7 @@ def main():
         for path in ('LICENSE', 'THIRD_PARTY.md', 'VERSION', 'docs/windows.md', 'tools/nexus_run.py'):
             copy(ROOT / path, Path(path).name)
         copy(ROOT / 'tools/windows/profile.example.json', 'profile.example.json')
-        copy(args.cuda_dir.parent / 'EULA.txt', 'licenses/NVIDIA-CUDA-EULA.txt')
+        copy(args.cuda_license or args.cuda_dir.parent / 'EULA.txt', 'licenses/NVIDIA-CUDA-EULA.txt')
         # Dependency notices are installed alongside the runtime by CMake.
         notices = args.runtime_dir / 'licenses'
         if not notices.is_dir():

@@ -55,6 +55,13 @@ class Release(unittest.TestCase):
         self.assertEqual(archive.with_name(archive.name + '.sha256').read_text().split()[0],
                          hashlib.sha256(archive.read_bytes()).hexdigest())
 
+    def test_explicit_installed_cuda_license(self):
+        args = self.package_inputs()
+        installed = self.root / 'installed-cuda-copyright'
+        (self.root / 'cuda/EULA.txt').rename(installed)
+        subprocess.run(args + ['--cuda-license', str(installed)], check=True, capture_output=True)
+        self.assertEqual(len(list((self.root / 'out').glob('*.zip'))), 1)
+
     def test_missing_runtime_blocks_archive(self):
         args = self.package_inputs()
         (self.root / 'cuda/bin/cublasLt64_13.dll').unlink()

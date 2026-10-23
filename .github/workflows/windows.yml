@@ -111,15 +111,28 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           & build/windows-worker/bin/Release/nexus-ai-journal-archive-test.exe
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Restore matching inference runtime
+        id: runtimecache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: build/runtime-install
+          key: ${{ runner.os }}-inference-cuda13.0.2-${{ hashFiles('tools/runtime/**', 'vendor/keryx-trace-abi6/tools/keryx-llama/**') }}-v1
       - name: Build matching inference runtime
+        if: steps.runtimecache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
           cmake -S tools/runtime -B build/runtime -A x64
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           cmake --build build/runtime --config Release --target nexus_inference_runtime --parallel 2
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          cmake --install build/runtime --config Release --prefix build/runtime-install
+          cmake --install build/runtime --config Release --prefix build/runtime-install --component nexus-runtime
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Save matching inference runtime
+        if: steps.runtimecache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: build/runtime-install
+          key: ${{ steps.runtimecache.outputs.cache-primary-key }}
       - name: Package reviewed build outputs
         shell: pwsh
         run: |
@@ -222,13 +235,30 @@ jobs:
             -DNEXUS_RUST_ORACLE="$PWD/oracle-rust/target/release/nexus-m21-oracle"
           cmake --build build/linux-cpu --parallel 2
           ctest --test-dir build/linux-cpu --output-on-failure
-      - name: Build matching inference runtime and package
+      - name: Restore matching inference runtime
+        id: runtimecache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: build/runtime-install
+          key: ${{ runner.os }}-inference-cuda13.0.2-${{ hashFiles('tools/runtime/**', 'vendor/keryx-trace-abi6/tools/keryx-llama/**') }}-v1
+      - name: Build matching inference runtime
+        if: steps.runtimecache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           set -euo pipefail
           cmake -S tools/runtime -B build/runtime -G Ninja -DCMAKE_BUILD_TYPE=Release
           cmake --build build/runtime --target nexus_inference_runtime --parallel 2
-          cmake --install build/runtime --prefix "$PWD/build/runtime-install"
+          cmake --install build/runtime --prefix "$PWD/build/runtime-install" --component nexus-runtime
+      - name: Save matching inference runtime
+        if: steps.runtimecache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: build/runtime-install
+          key: ${{ steps.runtimecache.outputs.cache-primary-key }}
+      - name: Package reviewed Linux build outputs
+        shell: bash
+        run: |
+          set -euo pipefail
           for notice in build/linux-worker/vcpkg_installed/x64-linux/share/*/copyright; do
             name="$(basename "$(dirname "$notice")")"
             mkdir -p "build/runtime-install/licenses/$name"
@@ -238,7 +268,8 @@ jobs:
             --cargo-home build/linux-worker/cargo-home --cargo-home "$HOME/.cargo"
           python3 tools/package_release.py --platform linux \
             --worker-dir build/linux-worker/bin --oracle oracle-rust/target/release/nexus-m21-oracle \
-            --runtime-dir build/runtime-install --cuda-dir "$CUDA_PATH/lib64" --inspector /usr/bin/readelf
+            --runtime-dir build/runtime-install --cuda-dir "$CUDA_PATH/lib64" --inspector /usr/bin/readelf \
+            --cuda-license /usr/share/doc/cuda-cudart-13-0/copyright
       - name: Upload Linux preview and checksums
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:

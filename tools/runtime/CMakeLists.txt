@@ -31,7 +31,7 @@ target_include_directories(nexus_inference_runtime PRIVATE
   "${nexus_llama_SOURCE_DIR}/include" "${nexus_llama_SOURCE_DIR}/src"
   "${nexus_llama_SOURCE_DIR}/ggml/include" "${nexus_llama_SOURCE_DIR}/common")
 target_link_libraries(nexus_inference_runtime PRIVATE llama ggml-cuda CUDA::cudart CUDA::cublas CUDA::cublasLt)
-install(TARGETS nexus_inference_runtime RUNTIME DESTINATION . LIBRARY DESTINATION .)
+install(TARGETS nexus_inference_runtime RUNTIME DESTINATION . COMPONENT nexus-runtime LIBRARY DESTINATION . COMPONENT nexus-runtime)
 
-install(FILES "${nexus_llama_SOURCE_DIR}/LICENSE" DESTINATION licenses/llama)
-install(FILES "${NEXUS_SOURCE}/vendor/keryx-trace-abi6/LICENSE-APACHE" DESTINATION licenses/keryx-runtime)
+install(FILES "${nexus_llama_SOURCE_DIR}/LICENSE" DESTINATION licenses/llama COMPONENT nexus-runtime)
+install(FILES "${NEXUS_SOURCE}/vendor/keryx-trace-abi6/LICENSE-APACHE" DESTINATION licenses/keryx-runtime COMPONENT nexus-runtime)
