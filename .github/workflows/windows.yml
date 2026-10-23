@@ -60,7 +60,7 @@ jobs:
         with:
           cuda: '13.0.2'
           sub-packages: '["nvcc", "cudart", "nvrtc", "cublas", "cublas_dev", "visual_studio_integration"]'
-          use-github-cache: 'false'
+          use-github-cache: 'true'
       - name: Configure native NVIDIA worker
         shell: pwsh
         run: |
@@ -138,6 +138,10 @@ jobs:
           path: .local/vcpkg-cache
           key: linux-vcpkg-${{ hashFiles('tools/windows/vcpkg.json') }}
           restore-keys: linux-vcpkg-
+      - name: Native build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y autoconf autoconf-archive automake libtool ninja-build
       - name: Pinned dependencies
         shell: bash
         run: |
@@ -153,7 +157,7 @@ jobs:
           method: network
           sub-packages: '["nvcc", "cudart", "cudart-dev", "driver-dev", "nvrtc", "nvrtc-dev"]'
           non-cuda-sub-packages: '["libcublas", "libcublas-dev"]'
-          use-github-cache: 'false'
+          use-github-cache: 'true'
       - name: Configure and build Linux worker
         shell: bash
         run: |
