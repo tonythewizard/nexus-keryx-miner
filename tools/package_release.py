@@ -75,6 +75,8 @@ def main():
             'version': version, 'commit': commit,
             'source': f'https://github.com/tonythewizard/nexus-keryx-miner/tree/{commit}',
             'platform': args.platform, 'architecture': 'x86_64', 'cuda_architecture': 'sm_86',
+            'inference_source': 'https://github.com/ggml-org/llama.cpp/tree/12127defda4f41b7679cb2477a4b0d65ee6a0c8f',
+            'inference_patch_sha256': hashlib.sha256((ROOT / 'vendor/keryx-trace-abi6/tools/keryx-llama/patches/0001-canonical-trace.patch').read_bytes()).hexdigest(),
             'status': 'experimental-native-cli', 'gpu_execution_validated': False,
             'h15_complete': False, 'desktop_included': False,
         }, indent=2) + '\n')

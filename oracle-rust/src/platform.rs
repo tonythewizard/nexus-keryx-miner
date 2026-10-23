@@ -47,3 +47,32 @@ pub fn cpu_ns() -> u64 {
     let ticks = |t: FILETIME| (u64::from(t.dwHighDateTime) << 32) | u64::from(t.dwLowDateTime);
     (ticks(kernel) + ticks(user)) * 100
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Read, Write};
+    #[test]
+    fn native_model_read_and_cpu_clock() {
+        let directory = std::path::PathBuf::from(std::env::var_os("NEXUS_ORACLE_TEST_DIR")
+            .expect("NEXUS_ORACLE_TEST_DIR required for isolated native file tests"));
+        assert!(directory.is_absolute());
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join(format!("oracle-{}-file.bin", std::process::id()));
+        let first = cpu_ns();
+        {
+            let mut fixture = OpenOptions::new().write(true).create_new(true).open(&path).unwrap();
+            fixture.write_all(b"abc").unwrap();
+            fixture.sync_all().unwrap();
+        }
+        {
+            let mut file = open_model(&path).unwrap();
+            let mut data = Vec::new();file.read_to_end(&mut data).unwrap();
+            assert_eq!(data, b"abc");
+            #[cfg(windows)]
+            assert!(OpenOptions::new().write(true).open(&path).is_err(), "mutable model sharing allowed");
+        }
+        std::fs::remove_file(path).unwrap();
+        assert!(cpu_ns() >= first);
+    }
+}

@@ -2,7 +2,7 @@ name: Native CLI previews
 on:
   push:
     branches: [main, feature/windows-native]
-    tags: ['v*-windows-preview*']
+    tags: ['v*-native-preview*']
   pull_request:
   workflow_dispatch:
 permissions:
@@ -79,6 +79,21 @@ jobs:
       - name: Build independent native verifier
         run: cargo build --release --locked --manifest-path oracle-rust/Cargo.toml --jobs 2
 
+      - name: Independent Windows proof parity and native Rust file tests
+        shell: pwsh
+        env:
+          NEXUS_ORACLE_TEST_DIR: ${{ github.workspace }}/build/windows/test-data/oracle
+        run: |
+          cargo test --release --locked --manifest-path oracle-rust/Cargo.toml --jobs 2
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & oracle-rust/target/release/nexus-m21-oracle.exe generate build/windows/test-data/official-v4.bin
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & build/windows/bin/Release/nexus-consensus-test.exe build/windows/test-data/official-v4.bin build/windows/test-data/cpp-proof.bin
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          foreach ($mode in @('verify', 'reject-tile', 'reject-target', 'reject-tier')) {
+            & oracle-rust/target/release/nexus-m21-oracle.exe $mode build/windows/test-data/cpp-proof.bin
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          }
       - name: Build matching inference runtime
         shell: pwsh
         run: |
@@ -93,9 +108,11 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force build/runtime-install/licenses/libb2 | Out-Null
           Copy-Item build/windows-worker/_deps/nexus_blake2-src/COPYING build/runtime-install/licenses/libb2/COPYING
-          foreach ($name in @('openssl', 'blake3')) {
-            New-Item -ItemType Directory -Force "build/runtime-install/licenses/$name" | Out-Null
-            Copy-Item "build/windows-worker/vcpkg_installed/x64-windows-static-md/share/$name/copyright" "build/runtime-install/licenses/$name/copyright"
+          foreach ($dependency in Get-ChildItem build/windows-worker/vcpkg_installed/x64-windows-static-md/share -Directory) {
+            if (Test-Path "$($dependency.FullName)/copyright") {
+              New-Item -ItemType Directory -Force "build/runtime-install/licenses/$($dependency.Name)" | Out-Null
+              Copy-Item "$($dependency.FullName)/copyright" "build/runtime-install/licenses/$($dependency.Name)/copyright"
+            }
           }
           $vswhere = "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe"
           $vsroot = & $vswhere -latest -products '*' -property installationPath
@@ -187,9 +204,10 @@ jobs:
           cmake -S tools/runtime -B build/runtime -G Ninja -DCMAKE_BUILD_TYPE=Release
           cmake --build build/runtime --target nexus_inference_runtime --parallel 2
           cmake --install build/runtime --prefix "$PWD/build/runtime-install"
-          for name in openssl blake3 libb2; do
+          for notice in build/linux-worker/vcpkg_installed/x64-linux/share/*/copyright; do
+            name="$(basename "$(dirname "$notice")")"
             mkdir -p "build/runtime-install/licenses/$name"
-            cp "build/linux-worker/vcpkg_installed/x64-linux/share/$name/copyright" "build/runtime-install/licenses/$name/copyright"
+            cp "$notice" "build/runtime-install/licenses/$name/copyright"
           done
           python3 tools/package_release.py --platform linux \
             --worker-dir build/linux-worker/bin --oracle oracle-rust/target/release/nexus-m21-oracle \

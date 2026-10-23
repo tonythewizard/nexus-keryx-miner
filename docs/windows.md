@@ -26,7 +26,7 @@ node/IPFS databases or an existing escrow journal. Keep private data outside the
 extracted archive and outside the Git checkout.
 
 Use Windows 10/11 x64 with a driver compatible with CUDA 13, an SM 8.6 NVIDIA
-GPU, Python 3.11+ for the optional launcher and the Microsoft Visual C++ x64
+GPU, a CPU with AVX2/FMA/F16C/BMI2 support for the inference runtime, Python 3.11+ for the optional launcher and the Microsoft Visual C++ x64
 runtime (included DLLs when available). A synced compatible node and local
 Kubo API are external requirements. The model ID, model checksum, tree format,
 wallet delegation, signing and recovery checks remain enforced by the worker.
@@ -46,6 +46,8 @@ this command only prints compiled capabilities and does not initialize a GPU:
 ```
 
 ## Explicit local configuration
+
+Run the preview as a standard, non-elevated Windows user. Create a private data directory with inheritable permissions for that user and SYSTEM before importing an existing identity and its state.
 
 Copy `profile.example.json` to private storage and fill its fields locally.
 Use absolute paths for persistent data, model, tree, metadata, existing escrow
