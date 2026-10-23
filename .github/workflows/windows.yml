@@ -73,6 +73,40 @@ jobs:
       - name: Build independent native verifier
         run: cargo build --release --locked --manifest-path oracle-rust/Cargo.toml --jobs 2
 
+      - name: Build matching inference runtime
+        shell: pwsh
+        run: |
+          cmake -S tools/runtime -B build/runtime -A x64
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cmake --build build/runtime --config Release --target nexus_inference_runtime --parallel 2
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cmake --install build/runtime --config Release --prefix build/runtime-install
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Package reviewed build outputs
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force build/runtime-install/licenses/libb2 | Out-Null
+          Copy-Item build/windows-worker/_deps/nexus_blake2-src/COPYING build/runtime-install/licenses/libb2/COPYING
+          foreach ($name in @('openssl', 'blake3')) {
+            New-Item -ItemType Directory -Force "build/runtime-install/licenses/$name" | Out-Null
+            Copy-Item "build/windows-worker/vcpkg_installed/x64-windows-static-md/share/$name/copyright" "build/runtime-install/licenses/$name/copyright"
+          }
+          $vswhere = "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe"
+          $vsroot = & $vswhere -latest -products '*' -property installationPath
+          $crt = Get-ChildItem "$vsroot/VC/Redist/MSVC/*/x64/Microsoft.VC143.CRT" -Directory | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $crt) { throw 'MSVC redistribution directory unavailable' }
+          python tools/package_release.py --platform windows `
+            --worker-dir build/windows-worker/bin/Release `
+            --oracle oracle-rust/target/release/nexus-m21-oracle.exe `
+            --runtime-dir build/runtime-install --cuda-dir "$env:CUDA_PATH/bin" --crt-dir "$($crt.FullName)"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Upload Windows preview and checksums
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: nexus-windows-x86_64-cuda-sm86-preview
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
       - name: Save compiled dependencies
         if: always() && steps.depcache.outputs.cache-hit != 'true'
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830

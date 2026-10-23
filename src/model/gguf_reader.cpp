@@ -129,7 +129,7 @@ consensus::Hash ReadOnlyGguf::recompute_root(const ScanGuard&guard,std::uint64_t
   if(interval==0)throw std::invalid_argument("progress interval must be positive");
   platform::ReadOnlyFile scan(path_, true);
   const auto before=scan.identity();
-  std::array<consensus::Hash,64> stack{};std::array<bool,64> used{};std::array<std::uint8_t,2*1024*1024> slab{};std::uint64_t index=0;
+  std::array<consensus::Hash,64> stack{};std::array<bool,64> used{};std::vector<std::uint8_t> slab(2*1024*1024);std::uint64_t index=0;
   for(const auto&t:tensors_){const auto count=t.bytes/32;std::uint64_t done=0;while(done<count){const auto take=std::min<std::uint64_t>(slab.size()/32,count-done);const auto off=tensor_data_offset_+t.data_offset+done*32;const auto want=static_cast<std::size_t>(take*32);scan.read_at_streaming(slab.data(),want,off);for(std::uint64_t j=0;j<take;j++){auto h=hash_bytes(slab.data()+j*32,32);std::size_t level=0;while(used[level]){h=pair_hash(stack[level],h);used[level]=false;level++;}if(level>=stack.size())throw std::runtime_error("Merkle accumulator overflow");stack[level]=h;used[level]=true;index++;if(index%interval==0){if(guard)guard(index,chunk_count_);std::cerr<<"GGUF_ROOT_PROGRESS chunks="<<index<<" total="<<chunk_count_<<"\n";}}done+=take;}}
   if(scan.identity()!=before)throw std::runtime_error("GGUF identity or metadata changed during root scan");
   if(index!=chunk_count_)throw std::runtime_error("root scan chunk count changed");

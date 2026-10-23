@@ -71,4 +71,4 @@ licenses and notices. Before pushing, rerun privacy/secret/history gates and
 review the staged files and commit metadata. Keep operational data private even
 though the source repository is public. The pre-push hook still restricts the
 destination to this project's GitHub repository and requires history scanning.
-The current workflow does not publish releases, packages or build artifacts.
+The Windows workflow can publish unsigned experimental build artifacts from reviewed build outputs. Source gates still exclude runtime data and unapproved binaries from Git. Package manifests identify the exact source commit and validation scope.

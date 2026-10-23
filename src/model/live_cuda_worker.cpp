@@ -1,4 +1,5 @@
 #include "keryx/nexus/platform/io.hpp"
+#include "keryx/nexus/platform/windows_device_lease.hpp"
 #include "keryx/nexus/developer_config.hpp"
 #include "keryx/nexus/live_gpu_selection.hpp"
 #include "keryx/nexus/scoped_file_cache_guard.hpp"
@@ -555,6 +556,9 @@ int main(int argc,char **argv) {
 
     startup.record("BOOT", StartupResult::Pass, "worker process entered startup gate");
     const auto& gpu_uuid=primary_gpu_uuid();
+#ifdef _WIN32
+    platform::WindowsDeviceLease device_lease(gpu_uuid);
+#endif
     const auto config = parse_live_worker_config(argc, argv,
         std::getenv("CUDA_VISIBLE_DEVICES"), gpu_uuid,
         std::getenv("NEXUS_POM_BACKEND"), std::getenv("NEXUS_POM_DEVICE_ID"),

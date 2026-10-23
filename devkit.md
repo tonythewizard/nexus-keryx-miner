@@ -60,12 +60,12 @@ checks; a below-threshold pool may correctly produce no claim.
 | Platform | Current status |
 | --- | --- |
 | Linux x86-64 | Build baseline. Uses POSIX APIs, `/proc`, sysfs, `flock`, dynamic loading and optional systemd user services. |
-| Windows | No validated native build. Port process/locking/memory/service code, ELF embedding and compiler flags before treating it as supported. WSL2 is a separate Linux environment, with its own driver/runtime limitations. |
+| Windows x64 | Native CLI port and MSVC/CUDA workflow; see `docs/windows.md`. Native file/ACL/process/DLL adapters are separate from Linux service controls. GPU execution and the Windows desktop are not validated. |
 | macOS | No validated build. No NVIDIA CUDA backend; POSIX/Linux differences and Vulkan availability require platform work. The presence of Tauri platform conditionals is not full miner support. |
 
 Compile for your own platform and toolchain. No OS support claim should be
 inferred from the repository being source-only. The existing native CUDA kernels
-target SM 8.6 and use an ELF x86-64 embedding recipe. Vulkan admission retains
+target SM 8.6 and use generated portable C++ device images. Vulkan admission retains
 specific vendor/device and feature checks: changing a UUID does not add support
 for a new GPU model. Vendor options in the UI are broader than tested execution.
 The worker has at most two admitted lanes; arbitrary multi-GPU Rig scheduling is
@@ -153,7 +153,7 @@ Use isolated test identities, not production wallet files.
 ## GPU build and runtime configuration
 
 Keep the real hardware profile in environment variables and an ignored CMake
-cache. Set `NEXUS_PRIMARY_GPU_UUID` to the intended NVIDIA UUID, and optionally
+cache. Set the runtime environment variable `NEXUS_PRIMARY_GPU_UUID` to the intended NVIDIA UUID, and optionally
 `NEXUS_SECONDARY_GPU_ID` to the selected `pci:...` identity. The committed zero
 values are inert fixtures. C++ uses local CMake definitions; Python reads the
 same names from the environment. Keep both values consistent.
@@ -169,8 +169,7 @@ cmake --build build/gpu --target nexus-live-cuda-worker --parallel 1
 ```
 
 `NEXUS_DATA_DIR` is a private persistent directory outside the checkout; Python
-defaults to `~/.local/share/nexus-keryx-miner`. `NEXUS_RECOVERY_ROOT` is the
-historical CMake spelling for the same runtime root, compiled into the worker.
+defaults to `~/.local/share/nexus-keryx-miner`. The distributable worker reads its absolute private runtime root from `NEXUS_DATA_DIR`. `NEXUS_RECOVERY_ROOT` remains a legacy CMake fixture setting.
 The CPU-only build defaults to an isolated `build/cpu/runtime` instead.
 
 The native worker's exact argument contract is in
@@ -255,3 +254,12 @@ scheduling are not established by the available adapters or UI options.
 Before a commit, review the diff and staged files. The security gate scans the
 actual staged bytes; the push hook and CI scan reachable history as well. Refer
 to `SECURITY.md` for scanner requirements, reviewed exceptions and publication.
+
+## Native distribution work
+
+The Windows workflow builds native executables, tests file/process adapters and
+assembles a CLI preview with matching inference runtime, verifier, dependency
+notices, exact source commit and checksums. See `docs/windows.md`.
+`tools/package_release.py` copies only named build outputs; runtime data is never
+an input. Binary packages remain outside Git. This workflow does not establish
+GPU execution, H15 completion, Windows desktop control or mainnet acceptance.

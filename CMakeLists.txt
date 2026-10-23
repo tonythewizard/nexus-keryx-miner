@@ -196,6 +196,7 @@ if(NEXUS_ENABLE_GRPC)
       "CARGO_HOME=${NEXUS_AI_BRIDGE_CARGO_HOME}"
       "CARGO_TARGET_DIR=${NEXUS_AI_BRIDGE_TARGET_DIR}"
       "CARGO_BUILD_JOBS=1"
+      "PROTOC=$<TARGET_FILE:protobuf::protoc>"
       "TMPDIR=${NEXUS_PERSISTENT_TMP}" "TMP=${NEXUS_PERSISTENT_TMP}" "TEMP=${NEXUS_PERSISTENT_TMP}"
       ${CARGO_EXECUTABLE} build --release --locked --manifest-path "${CMAKE_CURRENT_SOURCE_DIR}/ai-response-bridge/Cargo.toml"
     DEPENDS ai-response-bridge/Cargo.toml ai-response-bridge/Cargo.lock
