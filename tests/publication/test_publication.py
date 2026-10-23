@@ -39,6 +39,20 @@ class PrivacyBoundaries(unittest.TestCase):
     def test_inert_identity_does_not_authorize_a_real_gpu(self):
         self.assertEqual(gate.violations("src/example.cpp", gate.SYNTHETIC_UUID.encode()), [])
 
+    def test_only_sha_pinned_gallery_images_are_allowed(self):
+        import json
+        hashes = json.loads((ROOT / "tools/publication-policy.json").read_text())["public_screenshot_sha256"]
+        old_hashes = gate.PUBLIC_SCREENSHOT_HASHES
+        gate.PUBLIC_SCREENSHOT_HASHES = hashes
+        self.addCleanup(setattr, gate, "PUBLIC_SCREENSHOT_HASHES", old_hashes)
+        path = "docs/screenshots/01-overview.png"
+        data = (ROOT / path).read_bytes()
+        self.assertEqual(gate.violations(path, data), [])
+        self.assertTrue(gate.violations(path, data + b"x"))
+        self.assertTrue(gate.violations(path, data, "120000"))
+        self.assertTrue(gate.violations("docs/screenshots/unreviewed.png", data))
+        self.assertTrue(gate.violations(path, b"\x89PNG\r\n\x1a\n" + b"x" * 64))
+
 
 @unittest.skipUnless(shutil.which("gitleaks"), "Gitleaks required for integration tests")
 class GitBoundaries(unittest.TestCase):

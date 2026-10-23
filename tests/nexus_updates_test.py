@@ -13,7 +13,9 @@ import nexus_dashboard as dashboard
 
 class UpdateTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
+        work = Path(__file__).resolve().parents[1] / '.local/tmp'
+        work.mkdir(parents=True, exist_ok=True)
+        self.temp = tempfile.TemporaryDirectory(dir=work); self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name); self.state = self.root / 'state/updates'
         self.state.mkdir(parents=True)
         for name, value in [('ROOT', self.root), ('STATE', self.state)]:
@@ -22,8 +24,8 @@ class UpdateTests(unittest.TestCase):
         self.manifest = dict(schema_version=1, git_commit=self.commit, version='0.0.2', platform='linux-x86_64', llama_abi=3,
                              stock_llama_sha256=updates.LLAMA_SHA, validation=dict(cuda_integration='PASS', rust_parity='PASS', escrow_claim_mock='PASS'),
                              worker=dict(asset='worker', sha256='b'*64), oracle=dict(asset='oracle', sha256='c'*64))
-    def test_default_on_and_toggle_persistence(self):
-        self.assertTrue(updates.configuration()['enabled'])
+    def test_default_off_and_toggle_persistence(self):
+        self.assertFalse(updates.configuration()['enabled'])
         updates.atomic(self.state/'config.json', {'enabled': False})
         self.assertFalse(updates.status()['enabled'])
     def test_disabled_never_calls_github_or_activation(self):

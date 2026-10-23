@@ -1,4 +1,13 @@
-# Publication and private data
+# Security policy
+
+## Supported scope
+
+Version 0.0.3 is an experimental source baseline, not a supported binary
+release. Maintainers review reports against the current `main` branch; no
+security maintenance period or response-time guarantee is promised for older
+commits or external models, drivers and services.
+
+## Publication and private data
 
 Only source, dependency lockfiles, reviewed synthetic protocol fixtures and
 text-encoded build inputs belong in this repository. Keep keys, delegation
@@ -38,16 +47,22 @@ Automated scanning is a gate, not proof that every possible private datum was
 detected. Review changed source and the complete history being pushed. Changes
 to hooks, workflows, scanner rules or fixture policy need particular attention.
 
-## Reporting issues and proposing fixes
+## Reporting vulnerabilities
 
-Submit a pull request to report a security issue and propose a fix. Describe
-the affected code or version, the impact and how the fix was checked. Use
-synthetic examples and tests instead of production data.
+**Do not disclose an unpatched vulnerability in a public issue, discussion or
+pull request.** Use **Security → Advisories → Report a vulnerability** on this
+repository if GitHub private vulnerability reporting is enabled. Include the
+affected revision, impact, reproduction steps using synthetic inputs and any
+proposed fix. Avoid submitting real credentials, model data or wallet material.
 
-This repository and its pull requests are public. Do not include credentials,
-wallet material, personal data or operational logs in PR descriptions, commits,
-tests or build logs. If a secret was committed, revoke it immediately, stop publication and
-review all reachable history; deleting the current file is insufficient.
+If the private reporting option is unavailable, the repository currently has
+no verified confidential contact endpoint. Do not publish exploit details as a
+workaround; the maintainer must enable a private reporting channel. Ordinary
+non-security bug reports and reviewed fixes may use public issues and pull
+requests. No guaranteed response or disclosure deadline is advertised.
+
+If a secret was committed, revoke it immediately, stop publication and review
+all reachable history; deleting the current file is insufficient.
 
 ## Public source publication
 

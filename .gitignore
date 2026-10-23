@@ -46,3 +46,15 @@ agent-api/
 .DS_Store
 .idea/
 .vscode/
+
+# Approved, redacted README screenshots. Hashes are pinned in the publication policy.
+!docs/screenshots/01-overview.png
+!docs/screenshots/02-gpu.png
+!docs/screenshots/03-ai-service.png
+!docs/screenshots/04-escrow.png
+!docs/screenshots/05-log.png
+!docs/screenshots/06-wallet.png
+!docs/screenshots/07-development.png
+!docs/screenshots/08-setup.png
+!docs/screenshots/09-controls.png
+!docs/screenshots/hero-overview.png

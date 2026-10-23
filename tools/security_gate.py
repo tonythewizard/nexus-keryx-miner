@@ -38,6 +38,24 @@ PATTERNS = {
 # These are upstream protocol fixtures derived from public, repeated test keys.
 # The set contains only their hashes. New wallet fixtures require explicit review.
 FIXTURE_ADDRESS_HASHES = set()  # populated from the reviewed policy file below
+PUBLIC_SCREENSHOT_HASHES = {}  # exact Git paths and SHA-256 digests, from policy
+
+
+def reviewed_screenshot(name, data, mode):
+    """Admit only exact, hash-pinned, metadata-free public gallery PNGs."""
+    if name not in PUBLIC_SCREENSHOT_HASHES or mode != "100644":
+        return False
+    if not 64 <= len(data) <= 256 * 1024:
+        return False
+    if not data.startswith(b"\x89PNG\r\n\x1a\n") or data[12:16] != b"IHDR":
+        return False
+    if data[8:12] != b"\x00\x00\x00\r" or not data.endswith(b"IEND\xaeB`\x82"):
+        return False
+    width = int.from_bytes(data[16:20], "big")
+    height = int.from_bytes(data[20:24], "big")
+    if not 1 <= width <= 2000 or not 1 <= height <= 2000:
+        return False
+    return hashlib.sha256(data).hexdigest() == PUBLIC_SCREENSHOT_HASHES[name]
 
 
 def git(*args):
@@ -46,6 +64,8 @@ def git(*args):
 
 def violations(name, data, mode="100644"):
     problems = []
+    if name.startswith("docs/screenshots/") and name.endswith(".png"):
+        return [] if reviewed_screenshot(name, data, mode) else ["unreviewed or modified public screenshot"]
     p = PurePosixPath(name)
     if p.is_absolute() or ".." in p.parts or any(c in name for c in "\n\r\t\\"):
         problems.append("unsafe filename")
@@ -124,7 +144,7 @@ def main():
     if args.index and args.history:
         parser.error("Choose index or history")
     import json
-    global FIXTURE_ADDRESS_HASHES
+    global FIXTURE_ADDRESS_HASHES, PUBLIC_SCREENSHOT_HASHES
     # Read this policy from Git too; the index/history must not depend on edits
     # to a working-tree allowlist that will not be published.
     if args.index:
@@ -133,7 +153,9 @@ def main():
         policy = git("show", "HEAD:tools/publication-policy.json")
     else:
         policy = (ROOT / "tools/publication-policy.json").read_bytes()
-    FIXTURE_ADDRESS_HASHES = set(json.loads(policy)["upstream_fixture_address_sha256"])
+    parsed_policy = json.loads(policy)
+    FIXTURE_ADDRESS_HASHES = set(parsed_policy["upstream_fixture_address_sha256"])
+    PUBLIC_SCREENSHOT_HASHES = dict(parsed_policy.get("public_screenshot_sha256", {}))
     records = list(history() if args.history else snapshot(args.index))
     count = 0
     failed = False
