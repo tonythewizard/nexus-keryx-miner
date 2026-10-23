@@ -20,7 +20,7 @@ AREAS = {"src", "include", "consensus", "ai-response-bridge", "oracle-rust",
          "vendor", "proto", "nexus-ui-desktop", "experiments", "scripts",
          "tests", "tools", ".github", ".githooks", "docs"}
 ROOT_FILES = {"README.md", "devkit.md", "AGENTS.md", "SECURITY.md", "THIRD_PARTY.md",
-              "VERSION", "CMakeLists.txt", ".gitignore", ".gitleaks.toml"}
+              "VERSION", "LICENSE", "CMakeLists.txt", ".gitignore", ".gitleaks.toml"}
 SUFFIXES = {".cpp", ".hpp", ".h", ".c", ".cu", ".cuh", ".rs", ".py", ".fish",
             ".sh", ".toml", ".lock", ".json", ".proto", ".html", ".css", ".js",
             ".cjs", ".svg", ".spvasm", ".hex", ".md", ".txt", ".yml", ".yaml", ".inc"}

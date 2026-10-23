@@ -91,7 +91,7 @@ Additional components:
 - Desktop: Rust/Cargo and the Tauri 2 system dependencies for the target OS
   (on Linux: GTK/WebKitGTK development packages); Python 3 for the stdio adapter.
 - MCP: Python packages pinned/constrained in `scripts/requirements-mcp.txt`.
-- Publication: Git, Gitleaks 8.30.1+; GitHub CLI for the private-destination hook.
+- Publication: Git, Gitleaks 8.30.1+; GitHub CLI for the destination-checking hook.
 
 From a fresh clone:
 

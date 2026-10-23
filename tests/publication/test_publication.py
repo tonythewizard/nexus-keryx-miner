@@ -1,5 +1,6 @@
 """Exercise publication boundaries with isolated, synthetic Git repositories."""
 import importlib.util
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -109,6 +110,60 @@ class GitBoundaries(unittest.TestCase):
                                 env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(b"mandatory", result.stderr)
+
+
+class PushBoundaries(unittest.TestCase):
+    def setUp(self):
+        persistent = ROOT / ".local/tmp"
+        persistent.mkdir(parents=True, exist_ok=True)
+        self.directory = tempfile.TemporaryDirectory(prefix="push-test-", dir=persistent)
+        self.addCleanup(self.directory.cleanup)
+        self.commands = Path(self.directory.name)
+        self.scan_log = self.commands / "scan.log"
+        fixtures = {
+            "gh": '#!/bin/sh\nprintf "%s\\n" "$HOOK_TEST_REPOSITORY"\nexit "$HOOK_TEST_GH_STATUS"\n',
+            "python3": '#!/bin/sh\nprintf "%s\\n" "$@" > "$HOOK_TEST_SCAN_LOG"\nexit "$HOOK_TEST_SCAN_STATUS"\n',
+        }
+        for name, script in fixtures.items():
+            command = self.commands / name
+            command.write_text(script)
+            command.chmod(0o755)
+        self.env = dict(os.environ, PATH=str(self.commands),
+                        HOOK_TEST_REPOSITORY="tonythewizard/nexus-keryx-miner",
+                        HOOK_TEST_GH_STATUS="0", HOOK_TEST_SCAN_STATUS="0",
+                        HOOK_TEST_SCAN_LOG=str(self.scan_log))
+
+    def run_hook(self, destination="https://github.com/tonythewizard/nexus-keryx-miner.git"):
+        return subprocess.run(["/bin/sh", str(ROOT / ".githooks/pre-push"), "origin", destination],
+                              env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    def test_authorized_destinations_require_history_scan(self):
+        for destination in ("https://github.com/tonythewizard/nexus-keryx-miner.git",
+                            "git@github.com:tonythewizard/nexus-keryx-miner.git"):
+            with self.subTest(destination=destination):
+                self.scan_log.unlink(missing_ok=True)
+                self.assertEqual(self.run_hook(destination).returncode, 0)
+                self.assertEqual(self.scan_log.read_text().splitlines(),
+                                 ["tools/security_gate.py", "--history"])
+
+    def test_unapproved_destination_is_rejected(self):
+        self.assertNotEqual(self.run_hook("https://github.com/example/other.git").returncode, 0)
+        self.assertFalse(self.scan_log.exists())
+
+    def test_changed_repository_identity_is_rejected(self):
+        self.env["HOOK_TEST_REPOSITORY"] = "example/other"
+        self.assertNotEqual(self.run_hook().returncode, 0)
+        self.assertFalse(self.scan_log.exists())
+
+    def test_github_failure_cannot_pass_even_with_matching_output(self):
+        self.env["HOOK_TEST_GH_STATUS"] = "1"
+        self.assertNotEqual(self.run_hook().returncode, 0)
+        self.assertFalse(self.scan_log.exists())
+
+    def test_history_scan_failure_blocks_push(self):
+        self.env["HOOK_TEST_SCAN_STATUS"] = "1"
+        self.assertNotEqual(self.run_hook().returncode, 0)
+        self.assertTrue(self.scan_log.exists())
 
 
 if __name__ == "__main__":

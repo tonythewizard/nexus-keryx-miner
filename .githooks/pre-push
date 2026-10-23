@@ -4,8 +4,9 @@ case "${2:-}" in
   https://github.com/tonythewizard/nexus-keryx-miner.git|git@github.com:tonythewizard/nexus-keryx-miner.git) ;;
   *) echo 'BLOCKED: unexpected publication destination' >&2; exit 1 ;;
 esac
-test "$(gh api repos/tonythewizard/nexus-keryx-miner --jq .private)" = true || {
-  echo 'BLOCKED: this development repository must remain private' >&2
+remote_repository=$(gh api repos/tonythewizard/nexus-keryx-miner --jq .full_name)
+test "$remote_repository" = tonythewizard/nexus-keryx-miner || {
+  echo 'BLOCKED: GitHub repository identity does not match the publication destination' >&2
   exit 1
 }
 python3 tools/security_gate.py --history

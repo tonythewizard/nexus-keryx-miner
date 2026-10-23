@@ -1,7 +1,8 @@
 # Third-party source and notices
 
-No project-wide license is selected yet. Do not replace or remove the licenses
-already attached to third-party source while choosing the project's license.
+This project's original contributions are licensed under `GPL-3.0-only`;
+see `LICENSE` and `README.md`. Third-party material retains its existing
+licenses and notices. Do not replace or remove them with the project license.
 
 | Source | Scope and retained notices |
 | --- | --- |
@@ -12,6 +13,17 @@ already attached to third-party source while choosing the project's license.
 | `consensus/` | Resident-kernel notice in `RESIDENT_KERNEL_LICENSE-MIT` |
 | `proto/current/` | Upstream wire definitions and `VERIFIABLE_INFERENCE_UPSTREAM.json` |
 | `ai-response-bridge/assets/trace-manifests/` | Text-encoded protocol manifests; `UPSTREAM.json` |
+
+License filenames are retained from the imported source. The files named
+`LICENSE-MIT` in the miner and trace directories, and
+`consensus/RESIDENT_KERNEL_LICENSE-MIT`, actually contain the Apache License
+2.0 text, identical to the retained `LICENSE-APACHE` files. Their names alone
+do not establish an MIT licensing option. This filename/content mismatch also
+exists in the upstream miner at commit
+`f2561aedeb649da7b2c46fc4e845e487c9a7d9e5`; its Cargo manifest declares
+`MIT/Apache-2.0`, and the retained Apache 2.0 text provides that licensing path.
+The inference and verifiable-inference license files contain the ISC license.
+Preserve these notices alongside the license for this project's contributions.
 
 The independent oracle needs the unmodified public Keryx node source at commit
 `70ed12af172ac8dab9004b6ef11848f581b2a060`. Fetch it into ignored `_deps/`

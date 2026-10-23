@@ -18,7 +18,7 @@ python3 tools/security_gate.py --index
 
 The pre-commit hook scans actual staged blobs, including their scanner config.
 The pre-push hook scans the reachable history and checks the exact GitHub
-destination and private visibility. CI runs history scanning again with
+destination. CI runs history scanning again with
 read-only permissions. Hooks are local Git configuration: each clone must
 install them. Do not use `--no-verify` or disable the scanner.
 
@@ -38,14 +38,22 @@ Automated scanning is a gate, not proof that every possible private datum was
 detected. Review changed source and the complete history being pushed. Changes
 to hooks, workflows, scanner rules or fixture policy need particular attention.
 
-## Reports and later publication
+## Reporting issues and proposing fixes
 
-Report sensitive issues privately to the repository owner. Do not include
-credentials or operational evidence in issues, PRs or build logs. If a secret
-was committed, stop publication, revoke it and review all reachable history;
-deleting the current file is insufficient.
+Submit a pull request to report a security issue and propose a fix. Describe
+the affected code or version, the impact and how the fix was checked. Use
+synthetic examples and tests instead of production data.
 
-Before making the repository public, select the project license, review
-third-party notices, rerun privacy/secret/history gates, inspect GitHub metadata
-and artifacts, and deliberately update the private-only push policy. The current
-workflow does not publish releases, packages or build artifacts.
+This repository and its pull requests are public. Do not include credentials,
+wallet material, personal data or operational logs in PR descriptions, commits,
+tests or build logs. If a secret was committed, revoke it immediately, stop publication and
+review all reachable history; deleting the current file is insufficient.
+
+## Public source publication
+
+This repository publishes source under GPL-3.0-only, with retained third-party
+licenses and notices. Before pushing, rerun privacy/secret/history gates and
+review the staged files and commit metadata. Keep operational data private even
+though the source repository is public. The pre-push hook still restricts the
+destination to this project's GitHub repository and requires history scanning.
+The current workflow does not publish releases, packages or build artifacts.

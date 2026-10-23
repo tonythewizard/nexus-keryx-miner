@@ -1,5 +1,6 @@
 [package]
 name = "nexus-desktop"
+license = "GPL-3.0-only"
 version = "0.0.3"
 edition = "2021"
 publish = false
