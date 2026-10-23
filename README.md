@@ -21,16 +21,16 @@ Nexus brings Keryx mining, AI service status, wallet authorization, escrow monit
 
 ## Downloads and Windows
 
-The [Windows native workflow](https://github.com/tonythewizard/nexus-keryx-miner/actions/workflows/windows.yml)
-builds the native `.exe`, Rust verifier and matching inference DLL, runs CPU/API
-tests and packages a ZIP with runtime dependencies, licenses and SHA-256 checksums.
+The [Native CLI workflow](https://github.com/tonythewizard/nexus-keryx-miner/actions/workflows/windows.yml)
+builds Windows and Linux executables, the Rust verifier and matching inference
+runtime, runs CPU/API tests and packages ZIP/tar.gz archives with runtime dependencies, licenses and SHA-256 checksums.
 Successful workflow runs provide the preview under **Artifacts**. Tagged downloads
 will appear on the [Releases page](https://github.com/tonythewizard/nexus-keryx-miner/releases).
 Only a completed packaging job produces a downloadable binary archive.
 
 | Distribution | Scope |
 | --- | --- |
-| Linux x86-64 | Existing worker and desktop development baseline; source build instructions below |
+| Linux x86-64 | CLI preview built on Ubuntu 24.04; existing desktop available from source |
 | Windows x64 preview | Native CLI, NVIDIA SM 8.6, explicit local profile; no WSL requirement |
 | Windows desktop, Windows AMD/Vulkan, macOS | Not included in the preview |
 

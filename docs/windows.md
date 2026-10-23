@@ -12,6 +12,10 @@ this preview as an equivalent replacement for SUPR 0.15.0 or as a validated
 post-H15 mainnet miner. CPU tests and a successful build do not establish GPU
 proof parity, inference preemption or accepted on-chain submissions on Windows.
 
+The companion Linux archive uses Ubuntu 24.04 as its build baseline, requires
+compatible glibc/libstdc++ and a CUDA 13 NVIDIA driver, and uses the same explicit
+Python launcher. Its GPU execution is also unvalidated as a packaged artifact.
+
 ## Package contents and requirements
 
 The ZIP contains `nexus-live-cuda-worker.exe`, `nexus-m21-oracle.exe`,
