@@ -91,6 +91,16 @@ class ReadOnlyFile final {
         std::uint64_t(st.st_ctim.tv_sec) * 1'000'000'000 + std::uint64_t(st.st_ctim.tv_nsec)};
 #endif
   }
+#ifdef _WIN32
+  bool same_file(HANDLE other) const {
+    BY_HANDLE_FILE_INFORMATION info{};
+    if(!GetFileInformationByHandle(other,&info))return false;
+    const auto current=identity();
+    return current.device==info.dwVolumeSerialNumber &&
+        current.index==((std::uint64_t(info.nFileIndexHigh)<<32)|info.nFileIndexLow) &&
+        current.size==((std::uint64_t(info.nFileSizeHigh)<<32)|info.nFileSizeLow);
+  }
+#endif
   const std::uint8_t* map() {
     if (mapped_) return static_cast<const std::uint8_t*>(mapped_);
     const auto size = identity().size;
@@ -145,6 +155,7 @@ class ReadOnlyFile final {
         FILE_ATTRIBUTE_NORMAL|FILE_FLAG_NO_BUFFERING,nullptr);
     if(raw==INVALID_HANDLE_VALUE)throw std::runtime_error("Unbuffered streaming unavailable");
     struct Guard{HANDLE h;~Guard(){CloseHandle(h);}} guard{raw};
+    if(!same_file(raw))throw std::runtime_error("Streaming file identity changed");
     std::unique_ptr<void,decltype(&_aligned_free)> buffer(_aligned_malloc(chunk,alignment),&_aligned_free);
     if(!buffer)throw std::runtime_error("Streaming buffer allocation failed");
     auto* output=static_cast<std::uint8_t*>(data);

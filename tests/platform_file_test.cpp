@@ -22,6 +22,13 @@ int main(int argc,char** argv){try{
   {
     platform::ReadOnlyFile file(path);const auto identity=file.identity();
     require(identity.size==data.size(),"identity size");
+#ifdef _WIN32
+    platform::WinHandle same(CreateFileW(path.c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,0,nullptr));
+    require(same && file.same_file(same.value),"same-file identity rejected");
+    const auto other=root/"other-file";{std::ofstream out(other);out<<"different";}
+    platform::WinHandle different(CreateFileW(other.c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,0,nullptr));
+    require(different && !file.same_file(different.value),"foreign file identity accepted");
+#endif
     auto* mapping=file.map();require(mapping,"mapping unavailable");
     require(std::equal(data.begin(),data.end(),mapping),"mapped bytes changed");
     std::atomic_bool good{true};std::vector<std::thread> threads;

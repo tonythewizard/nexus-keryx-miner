@@ -22,6 +22,7 @@ inline std::string windows_file_sha256(const std::string& path,FileHashIoStats* 
   if(prefer_direct) raw=CreateFileW(native.c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,
       FILE_ATTRIBUTE_NORMAL|FILE_FLAG_NO_BUFFERING,nullptr);
   struct Guard {HANDLE h;~Guard(){if(h!=INVALID_HANDLE_VALUE)CloseHandle(h);}} guard{raw};
+  if(raw!=INVALID_HANDLE_VALUE && !file.same_file(raw))throw std::runtime_error("SHA-256 file identity changed");
   FileHashIoStats io;io.direct_io=raw!=INVALID_HANDLE_VALUE;
   for(std::uint64_t offset=0;offset<before.size;){
     auto wanted=static_cast<std::size_t>(std::min<std::uint64_t>(chunk,before.size-offset));

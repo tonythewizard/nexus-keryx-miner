@@ -7,6 +7,9 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: native-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
 jobs:
   source:
     uses: ./.github/workflows/source-gates.yml
@@ -26,8 +29,10 @@ jobs:
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: .local/vcpkg-cache
-          key: windows-vcpkg-${{ hashFiles('tools/windows/vcpkg.json') }}
-          restore-keys: windows-vcpkg-
+          key: windows-vcpkg-${{ hashFiles('tools/windows/vcpkg.json') }}-v2-${{ github.sha }}
+          restore-keys: |
+            windows-vcpkg-${{ hashFiles('tools/windows/vcpkg.json') }}-v2-
+            windows-vcpkg-
       - name: Pinned Windows dependencies
         shell: pwsh
         run: |
@@ -135,7 +140,7 @@ jobs:
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: .local/vcpkg-cache
-          key: windows-vcpkg-${{ hashFiles('tools/windows/vcpkg.json') }}
+          key: windows-vcpkg-${{ hashFiles('tools/windows/vcpkg.json') }}-v2-${{ github.sha }}
 
   linux:
     needs: source
@@ -153,8 +158,10 @@ jobs:
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: .local/vcpkg-cache
-          key: linux-vcpkg-${{ hashFiles('tools/windows/vcpkg.json') }}
-          restore-keys: linux-vcpkg-
+          key: linux-vcpkg-${{ hashFiles('tools/windows/vcpkg.json') }}-v2-${{ github.sha }}
+          restore-keys: |
+            linux-vcpkg-${{ hashFiles('tools/windows/vcpkg.json') }}-v2-
+            linux-vcpkg-
       - name: Native build prerequisites
         run: |
           sudo apt-get update
@@ -224,7 +231,7 @@ jobs:
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: .local/vcpkg-cache
-          key: linux-vcpkg-${{ hashFiles('tools/windows/vcpkg.json') }}
+          key: linux-vcpkg-${{ hashFiles('tools/windows/vcpkg.json') }}-v2-${{ github.sha }}
   publish:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [source, cpu, linux]
