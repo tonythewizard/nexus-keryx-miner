@@ -105,9 +105,6 @@ if(NEXUS_ENABLE_CUDA)
     message(FATAL_ERROR "NEXUS_ENABLE_CUDA currently requires NEXUS_ENABLE_GRPC for captured-job binding")
   endif()
   enable_language(CUDA)
-  if(NEXUS_PRIMARY_GPU_UUID STREQUAL "GPU-00000000-0000-0000-0000-000000000000")
-    message(FATAL_ERROR "Configure NEXUS_PRIMARY_GPU_UUID explicitly for a CUDA build")
-  endif()
   find_package(CUDAToolkit 13 REQUIRED)
   set(CMAKE_CUDA_STANDARD 20)
   set(CMAKE_CUDA_STANDARD_REQUIRED ON)
@@ -128,40 +125,31 @@ nexus_warnings(nexus_capture -Wall -Wextra -Wpedantic -Wconversion -Wsign-conver
 target_link_libraries(nexus_consensus PUBLIC nexus_capture)
 
 if(NEXUS_ENABLE_CUDA)
-  find_program(NEXUS_OBJCOPY_EXECUTABLE NAMES objcopy REQUIRED)
-  # The PoM host path uses the Driver API. Compile the unchanged device kernels
-  # to an SM 8.6 cubin, embed it in the library, and launch via cuModule/cuLaunch
-  # so the worker does not acquire a CUDA Runtime SONAME of its own.
-  set(NEXUS_POM_CUBIN "${CMAKE_CURRENT_BINARY_DIR}/nexus_pom.cubin")
-  set(NEXUS_POM_IMAGE_OBJECT "${CMAKE_CURRENT_BINARY_DIR}/nexus_pom_image.o")
+  # Compile unchanged device kernels, then embed a portable C++ byte array.
+  # The resulting host library has no CUDA Runtime dependency of its own.
   set(NEXUS_CUDA_TEMP "${CMAKE_CURRENT_BINARY_DIR}/persistent-tmp")
   file(MAKE_DIRECTORY "${NEXUS_CUDA_TEMP}")
-  add_custom_command(OUTPUT "${NEXUS_POM_IMAGE_OBJECT}"
-    COMMAND ${CMAKE_COMMAND} -E env
-      "TMPDIR=${NEXUS_CUDA_TEMP}" "TMP=${NEXUS_CUDA_TEMP}" "TEMP=${NEXUS_CUDA_TEMP}"
-      ${CMAKE_CUDA_COMPILER} --cubin --cudart=none -arch=sm_86
-      "${CMAKE_CURRENT_SOURCE_DIR}/consensus/cuda_walk_kernels.cu"
-      -o "${NEXUS_POM_CUBIN}"
-    COMMAND ${CMAKE_COMMAND} -E chdir "${CMAKE_CURRENT_BINARY_DIR}"
-      ${NEXUS_OBJCOPY_EXECUTABLE} --input-target=binary --output-target=elf64-x86-64
-      --binary-architecture=i386:x86-64 nexus_pom.cubin nexus_pom_image.o
-    DEPENDS consensus/cuda_walk_kernels.cu
-    VERBATIM)
-  set_source_files_properties("${NEXUS_POM_IMAGE_OBJECT}" PROPERTIES
-    GENERATED TRUE EXTERNAL_OBJECT TRUE)
-  set(NEXUS_RESIDENT_IMAGE "${CMAKE_CURRENT_BINARY_DIR}/nexus_resident_image.o")
-  add_custom_command(OUTPUT "${NEXUS_RESIDENT_IMAGE}"
-    COMMAND ${CMAKE_COMMAND} -E env "TMPDIR=${NEXUS_CUDA_TEMP}" "TMP=${NEXUS_CUDA_TEMP}" "TEMP=${NEXUS_CUDA_TEMP}"
-      ${CMAKE_CUDA_COMPILER} --cubin --cudart=none -arch=sm_86
-      "${CMAKE_CURRENT_SOURCE_DIR}/consensus/cuda_resident_kernels.cu" -o "${CMAKE_CURRENT_BINARY_DIR}/nexus_resident.cubin"
-    COMMAND ${CMAKE_COMMAND} -E chdir "${CMAKE_CURRENT_BINARY_DIR}"
-      ${NEXUS_OBJCOPY_EXECUTABLE} --input-target=binary --output-target=elf64-x86-64
-      --binary-architecture=i386:x86-64 nexus_resident.cubin nexus_resident_image.o
-    DEPENDS consensus/cuda_resident_kernels.cu consensus/resident_keccak.cuh VERBATIM)
-  set_source_files_properties("${NEXUS_RESIDENT_IMAGE}" PROPERTIES GENERATED TRUE EXTERNAL_OBJECT TRUE)
-  add_library(nexus_cuda consensus/cuda_walk.cpp consensus/cuda_resident.cpp "${NEXUS_POM_IMAGE_OBJECT}" "${NEXUS_RESIDENT_IMAGE}")
-  add_custom_target(nexus_pom_image DEPENDS "${NEXUS_POM_IMAGE_OBJECT}")
-  add_dependencies(nexus_cuda nexus_pom_image)
+  set(NEXUS_CUDA_IMAGES)
+  foreach(image pom resident)
+    if(image STREQUAL "pom")
+      set(kernel cuda_walk_kernels.cu)
+    else()
+      set(kernel cuda_resident_kernels.cu)
+    endif()
+    set(cubin "${CMAKE_CURRENT_BINARY_DIR}/nexus_${image}.cubin")
+    set(embedded "${CMAKE_CURRENT_BINARY_DIR}/nexus_${image}_image.cpp")
+    add_custom_command(OUTPUT "${embedded}"
+      COMMAND ${CMAKE_COMMAND} -E env
+        "TMPDIR=${NEXUS_CUDA_TEMP}" "TMP=${NEXUS_CUDA_TEMP}" "TEMP=${NEXUS_CUDA_TEMP}"
+        ${CMAKE_CUDA_COMPILER} --cubin --cudart=none -arch=sm_86
+        "${CMAKE_CURRENT_SOURCE_DIR}/consensus/${kernel}" -o "${cubin}"
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/embed_cubin.py"
+        "${cubin}" "${embedded}" "_binary_nexus_${image}_cubin_start"
+      DEPENDS "consensus/${kernel}" consensus/resident_keccak.cuh tools/embed_cubin.py
+      VERBATIM)
+    list(APPEND NEXUS_CUDA_IMAGES "${embedded}")
+  endforeach()
+  add_library(nexus_cuda consensus/cuda_walk.cpp consensus/cuda_resident.cpp ${NEXUS_CUDA_IMAGES})
   target_include_directories(nexus_cuda PUBLIC include)
   target_link_libraries(nexus_cuda PUBLIC CUDA::cuda_driver nexus_model)
 endif()
@@ -296,6 +284,10 @@ if(NEXUS_ENABLE_GRPC)
       NEXUS_RECOVERY_ROOT="${NEXUS_RECOVERY_ROOT}")
     target_include_directories(nexus-live-cuda-worker PRIVATE "${PROTO_GEN}")
     target_link_libraries(nexus-live-cuda-worker PRIVATE nexus_cuda nexus_grpc nexus_model)
+    if(MSVC)
+      target_link_libraries(nexus-live-cuda-worker PRIVATE delayimp)
+      target_link_options(nexus-live-cuda-worker PRIVATE /DELAYLOAD:nvcuda.dll)
+    endif()
     add_executable(nexus-opoi-preemption-cuda-test tests/opoi_preemption_cuda_test.cpp)
     target_include_directories(nexus-opoi-preemption-cuda-test PRIVATE "${PROTO_GEN}")
     target_link_libraries(nexus-opoi-preemption-cuda-test PRIVATE nexus_cuda nexus_grpc nexus_model)

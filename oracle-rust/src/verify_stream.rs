@@ -1,12 +1,7 @@
 //! Local bounded transport; consensus verification is shared with verify-real.
 use std::io::{self, Read, Write};
 
-fn cpu_ns() -> u64 {
-    let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
-    assert_eq!(unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) }, 0);
-    ((usage.ru_utime.tv_sec + usage.ru_stime.tv_sec) as u64) * 1_000_000_000
-        + ((usage.ru_utime.tv_usec + usage.ru_stime.tv_usec) as u64) * 1_000
-}
+use crate::platform::cpu_ns;
 
 pub fn run() {
     let mut input = io::stdin().lock();

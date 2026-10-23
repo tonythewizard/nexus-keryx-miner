@@ -11,13 +11,20 @@ jobs:
     timeout-minutes: 45
     env:
       VCPKG_DEFAULT_TRIPLET: x64-windows-static-md
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.local/vcpkg-cache
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
+      - name: Restore compiled dependencies
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: .local/vcpkg-cache
+          key: windows-vcpkg-${{ hashFiles('tools/windows/vcpkg.json') }}
       - name: Pinned Windows dependencies
         shell: pwsh
         run: |
+          New-Item -ItemType Directory -Force .local/vcpkg-cache | Out-Null
           git clone https://github.com/microsoft/vcpkg.git .local/vcpkg
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           git -C .local/vcpkg checkout 23b8a8e7409c2d6346114a88e834165bde79a51c
@@ -37,3 +44,27 @@ jobs:
         run: cmake --build build/windows --config Release --parallel 2
       - name: Native CPU and Windows API tests
         run: ctest --test-dir build/windows -C Release --output-on-failure
+
+      - name: Install CUDA compiler (no GPU execution)
+        uses: Jimver/cuda-toolkit@b8bf9c6c28f8a92fbb04dcfcaee872e60c57462d
+        with:
+          cuda: '13.0.2'
+          sub-packages: '["nvcc", "cudart", "nvrtc", "visual_studio_integration"]'
+          use-github-cache: 'false'
+      - name: Configure native NVIDIA worker
+        shell: pwsh
+        run: |
+          cmake -S . -B build/windows-worker -A x64 `
+            -DCMAKE_TOOLCHAIN_FILE="$pwd/.local/vcpkg/scripts/buildsystems/vcpkg.cmake" `
+            -DVCPKG_MANIFEST_DIR="$pwd/tools/windows" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows-static-md -DVCPKG_MANIFEST_FEATURES=worker `
+            -DNEXUS_ENABLE_GRPC=ON -DNEXUS_ENABLE_CUDA=ON -DNEXUS_ENABLE_VULKAN_JIT=OFF -DBUILD_TESTING=OFF
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Build Windows worker
+        run: cmake --build build/windows-worker --config Release --target nexus-live-cuda-worker --parallel 2
+      - name: Worker capability smoke check (no GPU)
+        run: build/windows-worker/bin/Release/nexus-live-cuda-worker.exe --inference-capabilities
+      - name: Fetch unmodified pinned oracle dependency
+        run: python tools/fetch_upstream.py
+      - name: Build independent native verifier
+        run: cargo build --release --locked --manifest-path oracle-rust/Cargo.toml --jobs 2

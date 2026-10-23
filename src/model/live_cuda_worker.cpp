@@ -145,7 +145,7 @@ std::atomic_bool process_stop{false};
 static_assert(std::atomic_bool::is_always_lock_free,
               "signal handler requires lock-free atomic_bool");
 extern "C" void request_stop(int) { process_stop.store(true,std::memory_order_relaxed); }
-constexpr std::string_view gpu_uuid = "" NEXUS_PRIMARY_GPU_UUID "";
+
 constexpr std::uint64_t first_nonce = 0x4b455259584d3231ULL;
 constexpr Hash official_model{0xbd,0x34,0x56,0x8c,0xd8,0x9f,0x5f,0x19,0xc6,0xc3,0xa6,0xe1,0xa6,0x1b,0x92,0x9b,0xc8,0x68,0x70,0x94,0x09,0xea,0xad,0x8e,0x67,0x2d,0x85,0xf3,0xc1,0xeb,0x57,0x10};
 constexpr Hash official_root{0x2c,0x49,0x71,0x64,0xea,0xf2,0x00,0x78,0xad,0xd2,0x0e,0x82,0xae,0x4e,0x1b,0x0f,0xdb,0x27,0xd3,0xfd,0xd5,0xea,0xef,0xc1,0xc4,0x8f,0x20,0x41,0x11,0xe1,0x4e,0x88};
@@ -392,7 +392,7 @@ fs::path prepare_nexus_escrow_state() {
 #ifndef NEXUS_RECOVERY_ROOT
 #error NEXUS_RECOVERY_ROOT must identify the persistent operational state root
 #endif
-  const fs::path root = fs::path(NEXUS_RECOVERY_ROOT);
+  const fs::path root = developer_data_root();
   const auto state_dir = root / "state" / "ai-service";
   fs::create_directories(state_dir);
   const auto state = state_dir / "escrow_state.json";
@@ -554,6 +554,7 @@ int main(int argc,char **argv) {
     }
 
     startup.record("BOOT", StartupResult::Pass, "worker process entered startup gate");
+    const auto& gpu_uuid=primary_gpu_uuid();
     const auto config = parse_live_worker_config(argc, argv,
         std::getenv("CUDA_VISIBLE_DEVICES"), gpu_uuid,
         std::getenv("NEXUS_POM_BACKEND"), std::getenv("NEXUS_POM_DEVICE_ID"),
@@ -654,9 +655,9 @@ int main(int argc,char **argv) {
     std::unique_ptr<AmdMemoryHandoff> amd_memory_handoff;
     std::unique_ptr<opoi::VulkanInferenceProcess> vulkan_ai_process;
     if(vulkan_ai_config){
-      if(primary_vulkan)primary_vulkan_lease=std::make_unique<SecondaryDeviceLease>(NEXUS_RECOVERY_ROOT,true);
+      if(primary_vulkan)primary_vulkan_lease=std::make_unique<SecondaryDeviceLease>(developer_data_root(),true);
       else {
-        secondary_device_lease=std::make_unique<SecondaryDeviceLease>(NEXUS_RECOVERY_ROOT);
+        secondary_device_lease=std::make_unique<SecondaryDeviceLease>(developer_data_root());
         amd_memory_handoff=std::make_unique<AmdMemoryHandoff>();
       }
       if(bounded_file_sha256(vulkan_ai_config->library)!=vulkan_ai_config->library_sha)
@@ -688,7 +689,7 @@ int main(int argc,char **argv) {
     service_identity = ai::service_identity_from_payout(pay, &service_identity_error);
     const auto escrow_key = extra.substr(escrow_pos + 8, 64);
     const char *key_env=std::getenv("NEXUS_ESCROW_KEY_FILE");
-    const fs::path escrow_path=key_env&&*key_env?fs::path(key_env):fs::path(NEXUS_RECOVERY_ROOT)/"state/setup/escrow.key";
+    const fs::path escrow_path=key_env&&*key_env?fs::path(key_env):developer_data_root()/"state/setup/escrow.key";
     const char *ipfs_env=std::getenv("NEXUS_IPFS_API_URL");
     const std::string ipfs_api=ipfs_env&&*ipfs_env?ipfs_env:"http://127.0.0.1:5001";
     std::unique_ptr<ai::AiResponseService> ai_response_service;
@@ -766,7 +767,7 @@ int main(int argc,char **argv) {
     ai_config.signed_response_activation_daa=76'316'623ULL;
     // Keep response intent/reconciliation state across candidate restarts. The session
     // output directory is timestamped and therefore cannot serve as a recovery journal.
-    ai_config.journal_path=fs::path(NEXUS_RECOVERY_ROOT)/"state"/"ai-service"/"ai-response.journal";
+    ai_config.journal_path=developer_data_root()/"state"/"ai-service"/"ai-response.journal";
     try {ai_response_service=std::make_unique<ai::AiResponseService>(std::move(ai_config));}
     catch(const std::exception&e){startup.record("AI_RESPONSE_TRANSPORT_READY",StartupResult::Blocked,
         std::string("AiResponse production service initialization failed: ")+e.what());return 78;}
@@ -875,7 +876,7 @@ int main(int argc,char **argv) {
 
     try {
       strike_monitor = std::make_unique<ai::StrikeMonitor>(*service_identity,
-          fs::path(NEXUS_RECOVERY_ROOT) / "state" / "ai-service" / "strikes.jsonl",
+          developer_data_root() / "state" / "ai-service" / "strikes.jsonl",
           [endpoint, identity = *service_identity] {
             const auto rpc = probe_ai_service_rpc(endpoint, 0, identity, std::chrono::seconds(5),
                                                    ServiceRpcQuery::StrikesOnly);
@@ -951,7 +952,7 @@ int main(int argc,char **argv) {
     std::unique_ptr<SecondaryWorkLane> secondary_lane;
     std::atomic_bool secondary_batch_ready{false}; // Executor writes; readiness telemetry reads.
     if(secondary_config) {
-      if(!secondary_device_lease)secondary_device_lease=std::make_unique<SecondaryDeviceLease>(NEXUS_RECOVERY_ROOT);
+      if(!secondary_device_lease)secondary_device_lease=std::make_unique<SecondaryDeviceLease>(developer_data_root());
       if(secondary_pom_enabled||!secondary_config->resident)
         secondary_engine=std::make_unique<consensus::VulkanWalkEngine>("" NEXUS_SECONDARY_GPU_ID "",secondary_config->module,secondary_config->sha256,secondary_vulkan_batch_size,
             secondary_config->resident?gguf.chunk_count()/32:0);
@@ -1436,7 +1437,7 @@ int main(int argc,char **argv) {
 #ifdef NEXUS_ENABLE_SECONDARY_VULKAN
         // Report resolved execution routes, not saved UI preferences.
         snapshot.pop_back();
-        snapshot+=",\"gpu_backends\":{\"" NEXUS_PRIMARY_GPU_UUID "\":\"";
+        snapshot+=",\"gpu_backends\":{\""+gpu_uuid+"\":\"";
         snapshot+=primary_pom_enabled?(is_bda_vulkan?"vulkan-bda":primary_vulkan?"vulkan-jit":"cuda-driver"):"disabled";
         snapshot+="\",\"" NEXUS_SECONDARY_GPU_ID "\":\"";
         snapshot+=secondary_pom_enabled?(secondary_config->module=="bda-native"?"vulkan-bda":"vulkan-jit"):"disabled";

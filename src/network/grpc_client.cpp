@@ -8,12 +8,17 @@
 #include "keryx/nexus/opoi.hpp"
 #include "messages.grpc.pb.h"
 
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
 #include <arpa/inet.h>
 #include <grpcpp/grpcpp.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <netinet/in.h>
 #include <unistd.h>
+#endif
 
 #include <algorithm>
 #include <chrono>
@@ -1267,6 +1272,16 @@ NodeReadiness probe_node_readiness(const std::string &endpoint,
 bool probe_local_ipfs_api(std::chrono::milliseconds timeout) {
   if (timeout <= std::chrono::milliseconds::zero())
     throw std::invalid_argument("IPFS readiness timeout must be positive");
+#ifdef _WIN32
+  struct Winsock {bool ready;Winsock(){WSADATA data{};ready=WSAStartup(MAKEWORD(2,2),&data)==0;}~Winsock(){if(ready)WSACleanup();}} winsock;
+  if(!winsock.ready)return false;
+  const SOCKET fd=::socket(AF_INET,SOCK_STREAM,0);
+  if(fd==INVALID_SOCKET)return false;
+  struct SocketGuard{SOCKET fd;~SocketGuard(){closesocket(fd);}} guard{fd};
+  const DWORD millis=static_cast<DWORD>(std::min<std::int64_t>(timeout.count(),30000));
+  (void)setsockopt(fd,SOL_SOCKET,SO_RCVTIMEO,reinterpret_cast<const char*>(&millis),sizeof(millis));
+  (void)setsockopt(fd,SOL_SOCKET,SO_SNDTIMEO,reinterpret_cast<const char*>(&millis),sizeof(millis));
+#else
   const int fd = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
   if (fd < 0) return false;
   struct SocketGuard { int fd; ~SocketGuard() { if (fd >= 0) ::close(fd); } } guard{fd};
@@ -1274,6 +1289,7 @@ bool probe_local_ipfs_api(std::chrono::milliseconds timeout) {
   timeval tv{static_cast<time_t>(millis / 1000), static_cast<suseconds_t>((millis % 1000) * 1000)};
   (void)::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
   (void)::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+#endif
   sockaddr_in address{};
   address.sin_family = AF_INET;
   address.sin_port = htons(5001);
@@ -1284,7 +1300,13 @@ bool probe_local_ipfs_api(std::chrono::milliseconds timeout) {
       "Content-Length: 0\r\nConnection: close\r\n\r\n";
   std::size_t sent = 0;
   while (sent < sizeof(request) - 1) {
-    const auto n = ::send(fd, request + sent, sizeof(request) - 1 - sent, MSG_NOSIGNAL);
+    const auto n = ::send(fd, request + sent, static_cast<int>(sizeof(request) - 1 - sent),
+#ifdef _WIN32
+      0
+#else
+      MSG_NOSIGNAL
+#endif
+      );
     if (n <= 0) return false;
     sent += static_cast<std::size_t>(n);
   }

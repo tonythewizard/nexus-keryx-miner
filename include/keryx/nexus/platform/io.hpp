@@ -41,7 +41,15 @@ struct Stat {
   std::uint64_t st_dev{}, st_ino{};
   std::int64_t st_size{};
 };
-inline int error() { _dosmaperr(GetLastError()); return -1; }
+inline int error() {
+  switch(GetLastError()) {
+    case ERROR_FILE_NOT_FOUND: case ERROR_PATH_NOT_FOUND: errno=ENOENT;break;
+    case ERROR_FILE_EXISTS: case ERROR_ALREADY_EXISTS: errno=EEXIST;break;
+    case ERROR_ACCESS_DENIED: case ERROR_SHARING_VIOLATION: errno=EACCES;break;
+    default: errno=EIO;break;
+  }
+  return -1;
+}
 class LocalMemory {
  public:
   void* value{};

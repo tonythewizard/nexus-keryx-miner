@@ -8,7 +8,15 @@ use keryx_math::Uint256;
 use std::{env, fs, path::Path};
 mod cuda_batch;
 mod gguf_index;
+mod platform;
+#[cfg(unix)]
 mod real_root;
+#[cfg(windows)]
+mod real_root {
+    pub fn verify(_: &std::path::Path, _: &std::path::Path) {
+        panic!("Full root audit requires Linux process/resource guards; verify-real and verify-real-stream are available on Windows");
+    }
+}
 mod real_verify;
 mod verify_stream;
 fn mix64(mut x: u64) -> u64 {

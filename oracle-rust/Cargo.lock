@@ -1381,6 +1381,7 @@ dependencies = [
  "keryx-consensus-core",
  "keryx-math",
  "libc",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

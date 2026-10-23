@@ -21,7 +21,7 @@
 
 namespace keryx::nexus::opoi {
 namespace {
-constexpr char authorized_uuid[] = "" NEXUS_PRIMARY_GPU_UUID "";
+
 constexpr char official_model_sha256[] = "946072b16f5d672e60357410f900888f6522b3ae49f241b5bf2142cb89637fb6";
 constexpr std::string_view stock_system_prompt =
     "You are a Keryx Network AI, a decentralized assistant served by the GPU miners of the Keryx network. "
@@ -199,7 +199,7 @@ struct StockLlamaRuntime::Impl {
 StockLlamaRuntime::StockLlamaRuntime(std::string library_path, std::string gguf_path)
     : impl_(std::make_unique<Impl>()) {
   const char *visible = std::getenv("CUDA_VISIBLE_DEVICES");
-  if (!visible || std::string(visible) != authorized_uuid)
+  if (!visible || std::string(visible) != primary_gpu_uuid())
     throw std::runtime_error("OPoI CUDA runtime requires CUDA_VISIBLE_DEVICES set only to authorized primary NVIDIA GPU UUID");
   if (sha256_file(gguf_path) != official_model_sha256)
     throw std::runtime_error("OPoI GGUF SHA-256 does not match the configured official model");

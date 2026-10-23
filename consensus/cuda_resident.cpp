@@ -12,7 +12,7 @@
 #include <stdexcept>
 namespace keryx::nexus::consensus {
 namespace {
-constexpr const char *allowed="" NEXUS_PRIMARY_GPU_UUID "";
+
 extern "C" const unsigned char _binary_nexus_resident_cubin_start[];
 void check(CUresult r,const char *where) {
   if(r==CUDA_SUCCESS)return;
@@ -50,7 +50,7 @@ struct CudaResidentSearch::Impl {
   std::vector<std::uint16_t> host_lut;
   Impl(const std::string &uuid,const model::ReadOnlyGguf &gguf,const std::vector<opoi::ResidentTensor>&tensors){
     const char *visible=std::getenv("CUDA_VISIBLE_DEVICES");
-    if(uuid!=allowed||!visible||uuid!=visible)throw std::runtime_error("resident solver requires exclusive authorized GPU UUID");
+    if(uuid!=primary_gpu_uuid()||!visible||uuid!=visible)throw std::runtime_error("resident solver requires exclusive authorized GPU UUID");
     check(cuInit(0),"cuInit");int count=0;check(cuDeviceGetCount(&count),"visible device count");
     if(count!=1)throw std::runtime_error("resident solver sees more than one device");
     check(cuDeviceGet(&ctx.device,0),"select visible device");CUuuid id{};check(cuDeviceGetUuid(&id,ctx.device),"verify UUID");
