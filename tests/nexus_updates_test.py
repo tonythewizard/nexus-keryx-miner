@@ -13,7 +13,9 @@ import nexus_dashboard as dashboard
 
 class UpdateTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
+        work = Path(__file__).resolve().parents[1] / '.local/tmp'
+        work.mkdir(parents=True, exist_ok=True)
+        self.temp = tempfile.TemporaryDirectory(dir=work); self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name); self.state = self.root / 'state/updates'
         self.state.mkdir(parents=True)
         for name, value in [('ROOT', self.root), ('STATE', self.state)]:
