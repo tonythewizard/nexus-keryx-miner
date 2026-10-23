@@ -435,7 +435,7 @@ void RequestJournal::persist_locked(const PendingRecord &changed) {
     if (keryx::nexus::platform::io::fsync(fd) != 0) throw std::runtime_error("AI request snapshot fsync failed");
     keryx::nexus::platform::io::close(fd);
     fd = -1;
-    if (::rename(next.c_str(), path_.c_str()) != 0) throw std::runtime_error("AI request snapshot atomic rename failed");
+    keryx::nexus::platform::io::replace(next, path_);
     const int dfd = keryx::nexus::platform::io::open(path_.parent_path().c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     if (dfd >= 0) { (void)keryx::nexus::platform::io::fsync(dfd); keryx::nexus::platform::io::close(dfd); }
     // Snapshot is durable before log truncation. If a crash occurs between these operations,

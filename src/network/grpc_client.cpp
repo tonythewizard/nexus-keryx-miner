@@ -7,13 +7,17 @@
 #include "keryx/nexus/node_stream_liveness.hpp"
 #include "keryx/nexus/opoi.hpp"
 #include "messages.grpc.pb.h"
+#include <grpcpp/grpcpp.h>
 
 #ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
+// Win32's message-loop macro collides with protobuf Reflection::GetMessage.
+#ifdef GetMessage
+#undef GetMessage
+#endif
 #else
 #include <arpa/inet.h>
-#include <grpcpp/grpcpp.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <netinet/in.h>
