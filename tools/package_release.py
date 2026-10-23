@@ -22,6 +22,7 @@ def main():
     parser.add_argument('--runtime-dir', required=True, type=Path)
     parser.add_argument('--cuda-dir', required=True, type=Path)
     parser.add_argument('--crt-dir', type=Path)
+    parser.add_argument('--inspector', type=Path, help='dumpbin.exe on Windows; readelf on Linux')
     parser.add_argument('--output', type=Path, default=ROOT / 'dist')
     args = parser.parse_args()
     windows = args.platform == 'windows'
@@ -71,12 +72,16 @@ def main():
         for notice in notices.rglob('*'):
             if notice.is_file():
                 copy(notice, Path('licenses') / notice.relative_to(notices))
+        if args.inspector:
+            from distribution_dependencies import verify
+            verify(package, args.platform, args.inspector)
         (package / 'BUILD.json').write_text(json.dumps({
             'version': version, 'commit': commit,
             'source': f'https://github.com/tonythewizard/nexus-keryx-miner/tree/{commit}',
             'platform': args.platform, 'architecture': 'x86_64', 'cuda_architecture': 'sm_86',
             'inference_source': 'https://github.com/ggml-org/llama.cpp/tree/12127defda4f41b7679cb2477a4b0d65ee6a0c8f',
             'inference_patch_sha256': hashlib.sha256((ROOT / 'vendor/keryx-trace-abi6/tools/keryx-llama/patches/0001-canonical-trace.patch').read_bytes()).hexdigest(),
+            'dependency_imports_checked': bool(args.inspector),
             'status': 'experimental-native-cli', 'gpu_execution_validated': False,
             'h15_complete': False, 'desktop_included': False,
         }, indent=2) + '\n')

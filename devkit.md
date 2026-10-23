@@ -16,6 +16,7 @@ is kept in `AGENTS.md`.
 
 | Area | Entry points and responsibility |
 | --- | --- |
+| Platform adapters | `include/keryx/nexus/platform/`: positional/unbuffered file reads, Windows ACLs, verifier children, DLL loading and device leases |
 | Worker | `src/model/live_cuda_worker.cpp`: startup admission, job processing, scheduling, proofs, AI priority, telemetry and shutdown |
 | Consensus | `consensus/pom_v4.cpp`, `include/keryx/nexus/consensus/`: canonical headers, targets, PoM walks, witness encoding and verification boundaries |
 | Model/tree | `src/model/gguf_reader.cpp`: read-only GGUF access, bounded tile reads and Merkle indexing; `gguf_main.cpp` provides inspection tools |

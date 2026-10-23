@@ -65,7 +65,7 @@ jobs:
         uses: Jimver/cuda-toolkit@b8bf9c6c28f8a92fbb04dcfcaee872e60c57462d
         with:
           cuda: '13.0.2'
-          sub-packages: '["nvcc", "cudart", "nvrtc", "cublas", "cublas_dev", "visual_studio_integration"]'
+          sub-packages: '["nvcc", "crt", "nvvm", "thrust", "cudart", "nvrtc", "cublas", "cublas_dev", "visual_studio_integration"]'
           use-github-cache: 'true'
       - name: Configure native NVIDIA worker
         shell: pwsh
@@ -135,10 +135,15 @@ jobs:
           $vsroot = & $vswhere -latest -products '*' -property installationPath
           $crt = Get-ChildItem "$vsroot/VC/Redist/MSVC/*/x64/Microsoft.VC143.CRT" -Directory | Sort-Object FullName -Descending | Select-Object -First 1
           if (-not $crt) { throw 'MSVC redistribution directory unavailable' }
+          $dumpbin = Get-ChildItem "$vsroot/VC/Tools/MSVC/*/bin/Hostx64/x64/dumpbin.exe" | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $dumpbin) { throw 'MSVC dependency inspector unavailable' }
+          python tools/collect_notices.py --output build/runtime-install/licenses `
+            --cargo-home build/windows-worker/cargo-home --cargo-home "$env:USERPROFILE/.cargo"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python tools/package_release.py --platform windows `
             --worker-dir build/windows-worker/bin/Release `
             --oracle oracle-rust/target/release/nexus-m21-oracle.exe `
-            --runtime-dir build/runtime-install --cuda-dir "$env:CUDA_PATH/bin" --crt-dir "$($crt.FullName)"
+            --runtime-dir build/runtime-install --cuda-dir "$env:CUDA_PATH/bin" --crt-dir "$($crt.FullName)" --inspector "$($dumpbin.FullName)"
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Upload Windows preview and checksums
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -178,7 +183,7 @@ jobs:
       - name: Native build prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install -y autoconf autoconf-archive automake libtool ninja-build
+          sudo apt-get install -y autoconf autoconf-archive automake libtool ninja-build fish
       - name: Pinned dependencies
         shell: bash
         run: |
@@ -229,9 +234,11 @@ jobs:
             mkdir -p "build/runtime-install/licenses/$name"
             cp "$notice" "build/runtime-install/licenses/$name/copyright"
           done
+          python3 tools/collect_notices.py --output build/runtime-install/licenses \
+            --cargo-home build/linux-worker/cargo-home --cargo-home "$HOME/.cargo"
           python3 tools/package_release.py --platform linux \
             --worker-dir build/linux-worker/bin --oracle oracle-rust/target/release/nexus-m21-oracle \
-            --runtime-dir build/runtime-install --cuda-dir "$CUDA_PATH/lib64"
+            --runtime-dir build/runtime-install --cuda-dir "$CUDA_PATH/lib64" --inspector /usr/bin/readelf
       - name: Upload Linux preview and checksums
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:

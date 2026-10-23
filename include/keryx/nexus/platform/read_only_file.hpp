@@ -32,6 +32,7 @@ class ReadOnlyFile final {
   };
   explicit ReadOnlyFile(const std::filesystem::path& path, bool no_atime = false):path_(path) {
 #ifdef _WIN32
+    no_atime_=no_atime;
     handle_ = CreateFileW(path.c_str(), GENERIC_READ | (no_atime ? FILE_WRITE_ATTRIBUTES : 0),
         FILE_SHARE_READ, nullptr, OPEN_EXISTING,
         FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED | FILE_FLAG_RANDOM_ACCESS, nullptr);
@@ -151,11 +152,16 @@ class ReadOnlyFile final {
     // Unaligned GGUF tiles are served through a bounded aligned bounce buffer.
     // This handle bypasses the filesystem cache instead of faking fadvise.
     constexpr std::size_t alignment=65536, chunk=1024*1024;
-    HANDLE raw=CreateFileW(path_.c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,
+    HANDLE raw=CreateFileW(path_.c_str(),GENERIC_READ | (no_atime_ ? FILE_WRITE_ATTRIBUTES : 0),FILE_SHARE_READ,nullptr,OPEN_EXISTING,
         FILE_ATTRIBUTE_NORMAL|FILE_FLAG_NO_BUFFERING,nullptr);
     if(raw==INVALID_HANDLE_VALUE)throw std::runtime_error("Unbuffered streaming unavailable");
     struct Guard{HANDLE h;~Guard(){CloseHandle(h);}} guard{raw};
     if(!same_file(raw))throw std::runtime_error("Streaming file identity changed");
+    if(no_atime_){
+      FILETIME unchanged{0xffffffff,0xffffffff};
+      if(!SetFileTime(raw,nullptr,&unchanged,nullptr))
+        throw std::runtime_error("Cannot suppress streaming last-access updates");
+    }
     std::unique_ptr<void,decltype(&_aligned_free)> buffer(_aligned_malloc(chunk,alignment),&_aligned_free);
     if(!buffer)throw std::runtime_error("Streaming buffer allocation failed");
     auto* output=static_cast<std::uint8_t*>(data);
@@ -199,6 +205,7 @@ class ReadOnlyFile final {
   void* mapped_{};
 #ifdef _WIN32
   HANDLE handle_{INVALID_HANDLE_VALUE}, mapping_{};
+  bool no_atime_{};
 #else
   int fd_{-1};
   std::size_t mapped_size_{};
