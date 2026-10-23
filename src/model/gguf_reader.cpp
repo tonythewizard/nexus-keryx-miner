@@ -13,10 +13,6 @@
 #include <openssl/evp.h>
 #include <cerrno>
 #include <cstring>
-#include <fcntl.h>
-#include <sys/mman.h>
-#include <sys/stat.h>
-#include <unistd.h>
 
 namespace keryx::nexus::model {
 namespace {
@@ -86,18 +82,11 @@ ReadOnlyGguf::ReadOnlyGguf(const std::filesystem::path &path):path_(path) {
   tile_spans_.reserve(tensors_.size());
   for(const auto&t:tensors_){const auto count=t.bytes/32;if(count){tile_spans_.push_back({first_chunk,count,tensor_data_offset_+t.data_offset});first_chunk+=count;}}
   if(first_chunk!=chunk_count_)throw std::runtime_error("canonical GGUF tile map count mismatch");
-  file_fd_=::open(path_.c_str(),O_RDONLY|O_CLOEXEC);
-  if(file_fd_<0)throw std::runtime_error("cannot open GGUF for persistent tile reads: "+std::string(std::strerror(errno)));
-  void *mapped = ::mmap(nullptr, file_size_, PROT_READ, MAP_SHARED, file_fd_, 0);
-  if(mapped != MAP_FAILED) {
-    mmap_base_ = static_cast<const std::uint8_t*>(mapped);
-    // Demand paging only: do not prefetch the entire GGUF beside the node.
-  }
+  file_ = std::make_unique<platform::ReadOnlyFile>(path_);
+  if(file_->identity().size!=file_size_)throw std::runtime_error("GGUF size changed during parsing");
+  mmap_base_ = file_->map();
 }
-ReadOnlyGguf::~ReadOnlyGguf(){
-  if(mmap_base_) ::munmap(const_cast<std::uint8_t*>(mmap_base_), file_size_);
-  if(file_fd_>=0)::close(file_fd_);
-}
+ReadOnlyGguf::~ReadOnlyGguf() = default;
 
 std::vector<std::uint8_t> ReadOnlyGguf::read_tile(std::uint64_t tile) const {
   std::vector<std::uint8_t> out(1024);read_tile_into(tile,std::span<std::uint8_t,1024>(out.data(),1024));return out;
@@ -123,16 +112,14 @@ void ReadOnlyGguf::read_tiles_impl(std::uint64_t tile,std::span<std::uint8_t> ou
     if(chunk<it->first_chunk||chunk>=it->first_chunk+it->chunk_count)throw std::runtime_error("canonical GGUF tile map has a gap");
     const auto local=chunk-it->first_chunk;const auto take=std::min(remaining,it->chunk_count-local);
     const auto fileoff=it->file_offset+local*32;
-    if(fileoff>static_cast<std::uint64_t>(std::numeric_limits<off_t>::max()))throw std::runtime_error("GGUF tile offset exceeds off_t");
+    if(fileoff>static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()))throw std::runtime_error("GGUF tile offset exceeds off_t");
     const auto want=static_cast<std::size_t>(take*32);
     if(!streaming && mmap_base_ && fileoff + want <= file_size_) {
       std::memcpy(out.data()+dest, mmap_base_+fileoff, want);
     } else {
-      std::size_t got=0;
-      while(got<want){const auto n=::pread(file_fd_,out.data()+dest+got,want-got,static_cast<off_t>(fileoff+got));if(n<0&&errno==EINTR)continue;if(n<=0)throw std::runtime_error("short GGUF tile pread");got+=static_cast<std::size_t>(n);}
+      if(streaming) file_->read_at_streaming(out.data()+dest,want,fileoff);
+      else file_->read_at(out.data()+dest,want,fileoff);
     }
-    if(streaming&&::posix_fadvise(file_fd_,static_cast<off_t>(fileoff),static_cast<off_t>(want),POSIX_FADV_DONTNEED)!=0)
-      throw std::runtime_error("Cannot release completed streaming GGUF cache range");
     remaining-=take;chunk+=take;dest+=take*32;++it;
   }
   if(remaining)throw std::runtime_error("canonical tile crosses invalid tensor map");
@@ -140,11 +127,11 @@ void ReadOnlyGguf::read_tiles_impl(std::uint64_t tile,std::span<std::uint8_t> ou
 
 consensus::Hash ReadOnlyGguf::recompute_root(const ScanGuard&guard,std::uint64_t interval) const {
   if(interval==0)throw std::invalid_argument("progress interval must be positive");
-  const auto fd=::open(path_.c_str(),O_RDONLY|O_CLOEXEC|O_NOATIME);if(fd<0)throw std::runtime_error("cannot open GGUF read-only without atime changes: "+std::string(std::strerror(errno)));
-  struct FdGuard{int fd;~FdGuard(){if(fd>=0)::close(fd);}} close_fd{fd};struct stat before{};if(::fstat(fd,&before)!=0)throw std::runtime_error("cannot stat GGUF before root scan");
+  platform::ReadOnlyFile scan(path_, true);
+  const auto before=scan.identity();
   std::array<consensus::Hash,64> stack{};std::array<bool,64> used{};std::array<std::uint8_t,2*1024*1024> slab{};std::uint64_t index=0;
-  for(const auto&t:tensors_){const auto count=t.bytes/32;std::uint64_t done=0;while(done<count){const auto take=std::min<std::uint64_t>(slab.size()/32,count-done);const auto off=tensor_data_offset_+t.data_offset+done*32;const auto want=static_cast<std::size_t>(take*32);std::size_t got=0;while(got<want){const auto n=::pread(fd,slab.data()+got,want-got,static_cast<off_t>(off+got));if(n<0&&errno==EINTR)continue;if(n<=0)throw std::runtime_error("short read during GGUF root scan");got+=static_cast<std::size_t>(n);}for(std::uint64_t j=0;j<take;j++){auto h=hash_bytes(slab.data()+j*32,32);std::size_t level=0;while(used[level]){h=pair_hash(stack[level],h);used[level]=false;level++;}if(level>=stack.size())throw std::runtime_error("Merkle accumulator overflow");stack[level]=h;used[level]=true;index++;if(index%interval==0){if(guard)guard(index,chunk_count_);std::cerr<<"GGUF_ROOT_PROGRESS chunks="<<index<<" total="<<chunk_count_<<"\n";}}if(::posix_fadvise(fd,static_cast<off_t>(off),static_cast<off_t>(want),POSIX_FADV_DONTNEED)!=0)throw std::runtime_error("unable to advise kernel to release scanned GGUF pages");done+=take;}}
-  struct stat after{};if(::fstat(fd,&after)!=0||before.st_dev!=after.st_dev||before.st_ino!=after.st_ino||before.st_size!=after.st_size||before.st_mtim.tv_sec!=after.st_mtim.tv_sec||before.st_mtim.tv_nsec!=after.st_mtim.tv_nsec)throw std::runtime_error("GGUF identity or metadata changed during root scan");
+  for(const auto&t:tensors_){const auto count=t.bytes/32;std::uint64_t done=0;while(done<count){const auto take=std::min<std::uint64_t>(slab.size()/32,count-done);const auto off=tensor_data_offset_+t.data_offset+done*32;const auto want=static_cast<std::size_t>(take*32);scan.read_at_streaming(slab.data(),want,off);for(std::uint64_t j=0;j<take;j++){auto h=hash_bytes(slab.data()+j*32,32);std::size_t level=0;while(used[level]){h=pair_hash(stack[level],h);used[level]=false;level++;}if(level>=stack.size())throw std::runtime_error("Merkle accumulator overflow");stack[level]=h;used[level]=true;index++;if(index%interval==0){if(guard)guard(index,chunk_count_);std::cerr<<"GGUF_ROOT_PROGRESS chunks="<<index<<" total="<<chunk_count_<<"\n";}}done+=take;}}
+  if(scan.identity()!=before)throw std::runtime_error("GGUF identity or metadata changed during root scan");
   if(index!=chunk_count_)throw std::runtime_error("root scan chunk count changed");
   std::size_t low=0;while(low<used.size()&&!used[low])low++;if(low==used.size())throw std::runtime_error("empty Merkle tree");
   consensus::Hash current=stack[low];std::size_t level=low;
@@ -163,8 +150,7 @@ SparseMerkleIndex::SparseMerkleIndex(const ReadOnlyGguf&gguf,std::filesystem::pa
   std::uint64_t count=gguf_.chunk_count(),offset=0;std::uint32_t level=0;
   while(true){const bool stored=(level>0&&level%6==0)||count==1;if(stored){checkpoints_.push_back({level,offset,count});if(count>std::numeric_limits<std::uint64_t>::max()/32||offset>std::numeric_limits<std::uint64_t>::max()-count*32)throw std::runtime_error("sparse checkpoint offset overflow");offset+=count*32;}if(count==1)break;count=count/2+count%2;level++;}
   total_levels_=level+1;if(!std::filesystem::is_regular_file(tree_)||std::filesystem::file_size(tree_)!=offset)throw std::runtime_error("sparse Merkle tree size does not match official layout");
-  tree_fd_=::open(tree_.c_str(),O_RDONLY|O_CLOEXEC);
-  if(tree_fd_<0)throw std::runtime_error("cannot open sparse Merkle tree: "+std::string(std::strerror(errno)));
+  tree_file_ = std::make_unique<platform::ReadOnlyFile>(tree_);
   // Pin only the upper sparse checkpoint and its derived levels. Never load the
   // bottom checkpoint or GGUF into another host-sized cache (4 MiB hard cap).
   try {
@@ -172,8 +158,7 @@ SparseMerkleIndex::SparseMerkleIndex(const ReadOnlyGguf&gguf,std::filesystem::pa
     if(resident_upper && cp!=checkpoints_.end() && cp->count<=65536) {
       upper_levels_.resize(total_levels_);
       auto &first=upper_levels_[12];first.resize(cp->count);
-      const auto bytes=first.size()*sizeof(consensus::Hash);std::size_t got=0;
-      while(got<bytes){const auto n=::pread(tree_fd_,reinterpret_cast<char*>(first.data())+got,bytes-got,static_cast<off_t>(cp->offset+got));if(n<0&&errno==EINTR)continue;if(n<=0)throw std::runtime_error("short upper Merkle checkpoint read");got+=n;}
+      const auto bytes=first.size()*sizeof(consensus::Hash);tree_file_->read_at(first.data(),bytes,cp->offset);
       upper_bytes_=bytes;
       for(std::uint32_t l=13;l<total_levels_;++l){
         const auto &previous=upper_levels_[l-1];auto &next=upper_levels_[l];next.resize((previous.size()+1)/2);
@@ -185,25 +170,20 @@ SparseMerkleIndex::SparseMerkleIndex(const ReadOnlyGguf&gguf,std::filesystem::pa
       if(root_cp==checkpoints_.end() || upper_levels_.back().size()!=1 || upper_levels_.back()[0]!=read_node(*root_cp,0))
         throw std::runtime_error("upper Merkle checkpoint root mismatch");
     }
-  }catch(...){::close(tree_fd_);tree_fd_=-1;throw;}
+  }catch(...){tree_file_.reset();throw;}
 
 }
-SparseMerkleIndex::~SparseMerkleIndex(){if(tree_fd_>=0)::close(tree_fd_);}
+SparseMerkleIndex::~SparseMerkleIndex() = default;
 std::uint64_t SparseMerkleIndex::count_at(std::uint32_t level)const{std::uint64_t count=gguf_.chunk_count();for(std::uint32_t i=0;i<level;i++)count=count/2+count%2;return count;}
 consensus::Hash SparseMerkleIndex::read_node(const Checkpoint&cp,std::uint64_t index)const{
   if(index>=cp.count)throw std::out_of_range("Merkle checkpoint node index");
   if(index>(std::numeric_limits<std::uint64_t>::max()-cp.offset)/32)
     throw std::runtime_error("Merkle checkpoint offset overflow");
   const auto off=cp.offset+index*32;
-  if(off>static_cast<std::uint64_t>(std::numeric_limits<off_t>::max()))
+  if(off>static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()))
     throw std::runtime_error("Merkle checkpoint offset exceeds off_t");
-  consensus::Hash h{};std::size_t done=0;
-  while(done<h.size()){
-    const auto n=::pread(tree_fd_,h.data()+done,h.size()-done,static_cast<off_t>(off+done));
-    if(n<0&&errno==EINTR)continue;
-    if(n<=0)throw std::runtime_error("short sparse Merkle checkpoint pread");
-    done+=static_cast<std::size_t>(n);
-  }
+  consensus::Hash h{};
+  tree_file_->read_at(h.data(),h.size(),off);
   return h;
 }
 namespace {
@@ -300,9 +280,8 @@ consensus::Hash SparseMerkleIndex::subtree(std::uint64_t start,std::uint64_t spa
     const auto count=cursor-begin;const auto node_index=start+begin;
     if(node_index>(std::numeric_limits<std::uint64_t>::max()-cp_it->offset)/32)throw std::runtime_error("Merkle checkpoint range overflow");
     const auto file_offset=cp_it->offset+node_index*32;
-    if(file_offset>static_cast<std::uint64_t>(std::numeric_limits<off_t>::max()))throw std::runtime_error("Merkle checkpoint range exceeds off_t");
-    const auto bytes=count*sizeof(consensus::Hash);std::size_t got=0;
-    while(got<bytes){const auto n=::pread(tree_fd_,level[begin].data()+got,bytes-got,static_cast<off_t>(file_offset+got));if(n<0&&errno==EINTR)continue;if(n<=0)throw std::runtime_error("short sparse Merkle checkpoint range pread");got+=static_cast<std::size_t>(n);}
+    if(file_offset>static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()))throw std::runtime_error("Merkle checkpoint range exceeds off_t");
+    const auto bytes=count*sizeof(consensus::Hash);tree_file_->read_at(level[begin].data(),bytes,file_offset);
     for(std::size_t i=begin;i<cursor;i++){present[i]=true;cache_node(src_level,start+i,level[i]);}
   }
   std::size_t count=node_count;
@@ -326,9 +305,8 @@ std::vector<consensus::Hash> SparseMerkleIndex::tile_path(std::uint64_t tile)con
     if(slab_begin>(std::numeric_limits<std::uint64_t>::max()-cp6->offset)/32)
       throw std::runtime_error("Merkle slab offset overflow");
     const auto off=cp6->offset+slab_begin*32;
-    if(off>static_cast<std::uint64_t>(std::numeric_limits<off_t>::max()))throw std::runtime_error("Merkle slab offset exceeds off_t");
-    const auto bytes=slab_count*sizeof(consensus::Hash);std::size_t got=0;
-    while(got<bytes){const auto n=::pread(tree_fd_,reinterpret_cast<char*>(slab.data())+got,bytes-got,static_cast<off_t>(off+got));if(n<0&&errno==EINTR)continue;if(n<=0)throw std::runtime_error("short Merkle slab pread");got+=static_cast<std::size_t>(n);}
+    if(off>static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()))throw std::runtime_error("Merkle slab offset exceeds off_t");
+    const auto bytes=slab_count*sizeof(consensus::Hash);tree_file_->read_at(slab.data(),bytes,off);
   }
   while(count>1){const auto sibling=(idx^1U)<count?(idx^1U):idx;consensus::Hash node{};
     if(level<upper_levels_.size() && !upper_levels_[level].empty()){
@@ -363,7 +341,7 @@ void SparseMerkleIndex::prefetch_tile_path(std::uint64_t tile) const {
   // All siblings at levels 6..11 lie in this one group of <=64 checkpoint nodes.
   const auto begin=((tile>>1)/64)*64;
   const auto count=std::min<std::uint64_t>(64,cp->count-begin);
-  (void)::posix_fadvise(tree_fd_,static_cast<off_t>(cp->offset+begin*32),static_cast<off_t>(count*32),POSIX_FADV_WILLNEED);
+  tree_file_->prefetch(cp->offset+begin*32,count*32);
   // Advice is optional; correctness always comes from exact pread + Rust.
   // Unsupported/failed advice falls back to the existing authoritative reads.
 }

@@ -7,6 +7,14 @@
 #include <chrono>
 #include <cerrno>
 #include <csignal>
+#include <memory>
+#include <span>
+#include <stdexcept>
+#include <string>
+#include <thread>
+#ifdef _WIN32
+#include "keryx/nexus/platform/windows_process.hpp"
+#else
 #include <fcntl.h>
 #include <poll.h>
 #include <pthread.h>
@@ -17,7 +25,10 @@
 #include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
+#endif
+#ifndef _WIN32
 extern char **environ;
+#endif
 namespace keryx::nexus {
 // One bounded, sequential official verifier. Any transport/validation error is fatal.
 class RustProofVerifier {
@@ -26,6 +37,7 @@ class RustProofVerifier {
   explicit RustProofVerifier(std::string executable):executable_(std::move(executable)){}
   RustProofVerifier(const RustProofVerifier&)=delete;
   ~RustProofVerifier() {
+#ifndef _WIN32
     if(write_>=0)close(write_);
     if(read_>=0)close(read_);
     if(pid_>0) {
@@ -43,6 +55,7 @@ class RustProofVerifier {
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
       }
     }
+#endif
   }
   Result verify(std::span<const std::uint8_t> context,std::span<const std::uint8_t> trace,
                 std::span<const std::uint8_t> proof) {
@@ -50,7 +63,11 @@ class RustProofVerifier {
     try {
       if(context.size()!=225 || trace.size()!=28+257*1024+256*8 || proof.empty() || proof.size()>2*1024*1024)
         throw std::runtime_error("invalid bounded verifier input dimensions");
+#ifdef _WIN32
+      if(!process_)process_=std::make_unique<platform::WindowsVerifierProcess>(std::filesystem::u8path(executable_));
+#else
       if(!pid_)start();
+#endif
       if(++sequence_==0)throw std::runtime_error("verification sequence exhausted");
       deadline_=std::chrono::steady_clock::now()+std::chrono::seconds(30);
       std::array<std::uint8_t,28> header{'N','X','V','R'};
@@ -79,6 +96,7 @@ class RustProofVerifier {
  private:
   template<class T>static void le(T &v,std::size_t p,std::uint64_t x,unsigned n){for(unsigned i=0;i<n;++i)v[p+i]=x>>(8*i);}
   template<class T>static std::uint64_t get(const T &v,std::size_t p,unsigned n){std::uint64_t x=0;for(unsigned i=0;i<n;++i)x|=std::uint64_t(v[p+i])<<(8*i);return x;}
+#ifndef _WIN32
   void start() {
     int input[2],output[2];
     if(pipe2(input,O_CLOEXEC))throw std::runtime_error("verifier input pipe failed");
@@ -121,7 +139,20 @@ class RustProofVerifier {
       restore();
     }catch(...){restore();throw;}
   }
-  std::string executable_;pid_t pid_{};int read_{-1},write_{-1};std::uint64_t sequence_{};bool failed_{};
+#else
+  void transfer(int channel,const void* data,std::size_t size,bool writing) {
+    (void)channel;
+    process_->transfer(const_cast<void*>(data),size,writing,deadline_);
+  }
+#endif
+  std::string executable_;
+#ifdef _WIN32
+  std::unique_ptr<platform::WindowsVerifierProcess> process_;
+  static constexpr int read_=0,write_=1;
+#else
+  pid_t pid_{};int read_{-1},write_{-1};
+#endif
+  std::uint64_t sequence_{};bool failed_{};
   std::chrono::steady_clock::time_point deadline_;
 };
 }

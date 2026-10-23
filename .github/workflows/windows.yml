@@ -1,0 +1,39 @@
+name: Windows native
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  cpu:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    env:
+      VCPKG_DEFAULT_TRIPLET: x64-windows-static-md
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Pinned Windows dependencies
+        shell: pwsh
+        run: |
+          git clone https://github.com/microsoft/vcpkg.git .local/vcpkg
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          git -C .local/vcpkg checkout 23b8a8e7409c2d6346114a88e834165bde79a51c
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & .local/vcpkg/bootstrap-vcpkg.bat -disableMetrics
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Configure MSVC x64
+        shell: pwsh
+        run: |
+          cmake -S . -B build/windows -A x64 `
+            -DCMAKE_TOOLCHAIN_FILE="$pwd/.local/vcpkg/scripts/buildsystems/vcpkg.cmake" `
+            -DVCPKG_MANIFEST_DIR="$pwd/tools/windows" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows-static-md `
+            -DNEXUS_ENABLE_GRPC=OFF -DNEXUS_ENABLE_CUDA=OFF -DNEXUS_ENABLE_VULKAN_JIT=OFF
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Build native executables
+        run: cmake --build build/windows --config Release --parallel 2
+      - name: Native CPU and Windows API tests
+        run: ctest --test-dir build/windows -C Release --output-on-failure

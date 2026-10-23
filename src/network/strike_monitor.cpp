@@ -1,11 +1,10 @@
+#include "keryx/nexus/platform/io.hpp"
 #include "keryx/nexus/strike_monitor.hpp"
 
 #include <cerrno>
-#include <fcntl.h>
 #include <fstream>
 #include <limits>
 #include <system_error>
-#include <unistd.h>
 
 namespace keryx::nexus::ai {
 namespace {
@@ -80,7 +79,7 @@ bool json_bool(std::string_view line, std::string_view key, bool &value) {
 void write_all(int fd, std::string_view data) {
   std::size_t offset = 0;
   while (offset < data.size()) {
-    const auto amount = ::write(fd, data.data() + offset, data.size() - offset);
+    const auto amount = keryx::nexus::platform::io::write(fd, data.data() + offset, data.size() - offset);
     if (amount < 0 && errno == EINTR) continue;
     if (amount <= 0) throw std::system_error(errno, std::generic_category(), "write strike journal");
     offset += static_cast<std::size_t>(amount);
@@ -199,13 +198,13 @@ void StrikeMonitor::persist(const StrikeSnapshot &s) {
       ",\"observed_unix_ms\":" + std::to_string(s.observed_unix_ms) +
       ",\"stale\":" + (s.stale ? "true" : "false") +
       ",\"error\":\"" + escaped(s.error) + "\"}\n";
-  const int fd = ::open(journal_.c_str(), O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC, 0600);
+  const int fd = keryx::nexus::platform::io::open(journal_.c_str(), O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC, 0600);
   if (fd < 0) throw std::system_error(errno, std::generic_category(), "open strike journal");
   try {
     write_all(fd, line);
-    if (::fsync(fd) != 0) throw std::system_error(errno, std::generic_category(), "fsync strike journal");
-  } catch (...) { (void)::close(fd); throw; }
-  if (::close(fd) != 0) throw std::system_error(errno, std::generic_category(), "close strike journal");
+    if (keryx::nexus::platform::io::fsync(fd) != 0) throw std::system_error(errno, std::generic_category(), "fsync strike journal");
+  } catch (...) { (void)keryx::nexus::platform::io::close(fd); throw; }
+  if (keryx::nexus::platform::io::close(fd) != 0) throw std::system_error(errno, std::generic_category(), "close strike journal");
 }
 
 void StrikeMonitor::recover_journal() {

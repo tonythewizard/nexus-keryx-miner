@@ -1,3 +1,4 @@
+#include "keryx/nexus/platform/io.hpp"
 #include "keryx/nexus/developer_config.hpp"
 #include "keryx/nexus/live_gpu_selection.hpp"
 #include "keryx/nexus/scoped_file_cache_guard.hpp"
@@ -63,9 +64,15 @@
 #include <mutex>
 #include <stdexcept>
 #include <string>
+#ifndef _WIN32
 #include <sys/types.h>
+#endif
+#ifndef _WIN32
 #include <sys/wait.h>
+#endif
+#ifndef _WIN32
 #include <spawn.h>
+#endif
 #include <csignal>
 #include <thread>
 #include <unordered_map>
@@ -76,19 +83,22 @@
 #include <ctime>
 #include <deque>
 #include <condition_variable>
-#include <sys/stat.h>
+#ifndef _WIN32
 #include <sys/file.h>
+#endif
+#ifndef _WIN32
 #include <sys/resource.h>
+#endif
 #include <regex>
 #include <set>
 #include <openssl/evp.h>
-#include <fcntl.h>
-#include <unistd.h>
 
 using namespace keryx::nexus;
 using namespace keryx::nexus::consensus;
 namespace fs = std::filesystem;
+#ifndef _WIN32
 extern char **environ;
+#endif
 namespace {
 #ifdef NEXUS_ENABLE_SECONDARY_VULKAN
 class SecondaryDeviceLease final {
@@ -97,17 +107,17 @@ public:
     const auto directory=root/"state/gpu-devices";
     fs::create_directories(directory);
     const auto path=directory/developer_device_lease_name(nvidia);
-    const int fd=::open(path.c_str(),O_CREAT|O_RDWR|O_CLOEXEC|O_NOFOLLOW,0600);
+    const int fd=keryx::nexus::platform::io::open(path.c_str(),O_CREAT|O_RDWR|O_CLOEXEC|O_NOFOLLOW,0600);
     if(fd<0)throw std::runtime_error("Cannot open exclusive AMD device lease");
-    struct stat st{};
-    if(::fstat(fd,&st)!=0||!S_ISREG(st.st_mode)||st.st_uid!=::geteuid()||(st.st_mode&0077)!=0){
-      ::close(fd);throw std::runtime_error("Unsafe AMD device lease file");
+    keryx::nexus::platform::io::Stat st{};
+    if(keryx::nexus::platform::io::fstat(fd,&st)!=0||!S_ISREG(st.st_mode)||st.st_uid!=keryx::nexus::platform::io::geteuid()||(st.st_mode&0077)!=0){
+      keryx::nexus::platform::io::close(fd);throw std::runtime_error("Unsafe AMD device lease file");
     }
-    if(::flock(fd,LOCK_EX|LOCK_NB)!=0){::close(fd);throw std::runtime_error("secondary AMD GPU already has an active device lease");}
+    if(::flock(fd,LOCK_EX|LOCK_NB)!=0){keryx::nexus::platform::io::close(fd);throw std::runtime_error("secondary AMD GPU already has an active device lease");}
     fd_=fd;
   }
   int descriptor() const noexcept {return fd_;}
-  ~SecondaryDeviceLease(){if(fd_>=0)::close(fd_);}
+  ~SecondaryDeviceLease(){if(fd_>=0)keryx::nexus::platform::io::close(fd_);}
 private:int fd_{-1};
 };
 #endif
@@ -117,11 +127,19 @@ std::uint64_t monotonic_ns() {
       std::chrono::steady_clock::now().time_since_epoch()).count());
 }
 std::uint64_t thread_cpu_ns() {
+#ifdef _WIN32
+  FILETIME created{},exited{},kernel{},user{};
+  if(!GetThreadTimes(GetCurrentThread(),&created,&exited,&kernel,&user))
+    throw std::runtime_error("Cannot measure worker CPU time");
+  const auto ticks=[](FILETIME t){return (std::uint64_t(t.dwHighDateTime)<<32)|t.dwLowDateTime;};
+  return (ticks(kernel)+ticks(user))*100;
+#else
   timespec ts{};
   if (::clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts) != 0)
     throw std::runtime_error("clock_gettime(CLOCK_THREAD_CPUTIME_ID) failed");
   return static_cast<std::uint64_t>(ts.tv_sec) * 1'000'000'000ULL +
          static_cast<std::uint64_t>(ts.tv_nsec);
+#endif
 }
 std::atomic_bool process_stop{false};
 static_assert(std::atomic_bool::is_always_lock_free,
@@ -181,8 +199,8 @@ std::vector<std::uint8_t> decode_hex_secret(std::string_view value) {
   return out;
 }
 std::array<std::uint8_t,32> load_existing_escrow_secret(const fs::path &path) {
-  struct stat st{};
-  if(::stat(path.c_str(),&st)!=0||!S_ISREG(st.st_mode)||(st.st_mode&0077)!=0)
+  keryx::nexus::platform::io::Stat st{};
+  if(keryx::nexus::platform::io::stat(path.c_str(),&st)!=0||!S_ISREG(st.st_mode)||(st.st_mode&0077)!=0)
     throw std::runtime_error("existing escrow key is absent, non-regular, or has unsafe permissions");
   std::ifstream in(path);std::string text;in>>text;
   if(!in||text.size()!=64)throw std::runtime_error("existing escrow key file has invalid format");
@@ -271,50 +289,50 @@ std::string sha256_file(const fs::path &path) {
 
 void copy_file_durable_new(const fs::path &source, const fs::path &destination,
                            std::string_view expected_sha256) {
-  struct stat st{};
-  if (::lstat(source.c_str(), &st) != 0 || !S_ISREG(st.st_mode) || S_ISLNK(st.st_mode))
+  keryx::nexus::platform::io::Stat st{};
+  if (keryx::nexus::platform::io::lstat(source.c_str(), &st) != 0 || !S_ISREG(st.st_mode) || S_ISLNK(st.st_mode))
     throw std::runtime_error("escrow backup is not a regular file");
   if (sha256_file(source) != expected_sha256)
     throw std::runtime_error("escrow backup checksum differs from the read-only audit");
-  const int in = ::open(source.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+  const int in = keryx::nexus::platform::io::open(source.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
   if (in < 0) throw std::runtime_error("cannot open verified escrow backup");
   const auto importing = fs::path(destination.string() + ".importing");
-  const int out = ::open(importing.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
-  if (out < 0) { const int saved = errno; ::close(in); errno = saved; throw std::runtime_error("cannot create NEXUS escrow import staging file without overwrite"); }
+  const int out = keryx::nexus::platform::io::open(importing.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
+  if (out < 0) { const int saved = errno; keryx::nexus::platform::io::close(in); errno = saved; throw std::runtime_error("cannot create NEXUS escrow import staging file without overwrite"); }
   bool ok = true;
   std::array<char, 64 * 1024> buffer{};
   for (;;) {
-    const auto n = ::read(in, buffer.data(), buffer.size());
+    const auto n = keryx::nexus::platform::io::read(in, buffer.data(), buffer.size());
     if (n == 0) break;
     if (n < 0 && errno == EINTR) continue;
     if (n < 0) { ok = false; break; }
     std::size_t offset = 0;
     while (offset < static_cast<std::size_t>(n)) {
-      const auto written = ::write(out, buffer.data() + offset, static_cast<std::size_t>(n) - offset);
+      const auto written = keryx::nexus::platform::io::write(out, buffer.data() + offset, static_cast<std::size_t>(n) - offset);
       if (written < 0 && errno == EINTR) continue;
       if (written <= 0) { ok = false; break; }
       offset += static_cast<std::size_t>(written);
     }
     if (!ok) break;
   }
-  if (ok && ::fsync(out) != 0) ok = false;
-  const int close_out = ::close(out);
-  const int close_in = ::close(in);
+  if (ok && keryx::nexus::platform::io::fsync(out) != 0) ok = false;
+  const int close_out = keryx::nexus::platform::io::close(out);
+  const int close_in = keryx::nexus::platform::io::close(in);
   if (!ok || close_out != 0 || close_in != 0 || sha256_file(importing) != expected_sha256) {
-    (void)::unlink(importing.c_str());
+    (void)keryx::nexus::platform::io::unlink(importing.c_str());
     throw std::runtime_error("durable escrow backup copy failed integrity verification");
   }
-  if (::link(importing.c_str(), destination.c_str()) != 0) {
+  if (keryx::nexus::platform::io::link(importing.c_str(), destination.c_str()) != 0) {
     const int saved = errno;
-    (void)::unlink(importing.c_str());
+    (void)keryx::nexus::platform::io::unlink(importing.c_str());
     errno = saved;
     throw std::runtime_error("cannot atomically publish escrow import without overwriting existing state");
   }
-  if (::unlink(importing.c_str()) != 0) throw std::runtime_error("cannot remove completed escrow import staging link");
-  const int directory = ::open(destination.parent_path().c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+  if (keryx::nexus::platform::io::unlink(importing.c_str()) != 0) throw std::runtime_error("cannot remove completed escrow import staging link");
+  const int directory = keryx::nexus::platform::io::open(destination.parent_path().c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
   if (directory < 0) throw std::runtime_error("cannot open escrow state directory for durability sync");
-  const int sync_result = ::fsync(directory);
-  const int close_result = ::close(directory);
+  const int sync_result = keryx::nexus::platform::io::fsync(directory);
+  const int close_result = keryx::nexus::platform::io::close(directory);
   if (sync_result != 0 || close_result != 0) throw std::runtime_error("escrow state directory durability sync failed");
 }
 
@@ -327,10 +345,10 @@ void backup_escrow_before_offchain(const fs::path &state_path, std::string_view 
   const auto stem = "pre-offchain-" + std::string(block_hash) + "-" + std::to_string(stamp);
   copy_file_durable_new(state_path, backup_dir / (stem + ".snapshot"), sha256_file(state_path));
   copy_file_durable_new(journal, backup_dir / (stem + ".journal"), sha256_file(journal));
-  const int directory = ::open(backup_dir.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+  const int directory = keryx::nexus::platform::io::open(backup_dir.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
   if (directory < 0) throw std::runtime_error("cannot open selected-chain escrow backup directory");
-  const int sync_result = ::fsync(directory);
-  const int close_result = ::close(directory);
+  const int sync_result = keryx::nexus::platform::io::fsync(directory);
+  const int close_result = keryx::nexus::platform::io::close(directory);
   if (sync_result != 0 || close_result != 0)
     throw std::runtime_error("cannot durably sync selected-chain escrow backup directory");
 }
@@ -338,8 +356,8 @@ void backup_escrow_before_offchain(const fs::path &state_path, std::string_view 
 void append_escrow_validation_audit(const fs::path &audit_path,
                                    const BlockChainStatus &status) {
   fs::create_directories(audit_path.parent_path());
-  struct stat st{};
-  if (::lstat(audit_path.c_str(), &st) == 0 &&
+  keryx::nexus::platform::io::Stat st{};
+  if (keryx::nexus::platform::io::lstat(audit_path.c_str(), &st) == 0 &&
       (!S_ISREG(st.st_mode) || S_ISLNK(st.st_mode) || (st.st_mode & 0077) != 0))
     throw std::runtime_error("escrow validation audit identity or permissions are unsafe");
   const char *state = "PENDING";
@@ -353,20 +371,20 @@ void append_escrow_validation_audit(const fs::path &audit_path,
   const auto detail = status.error.substr(0, 1024);
   const auto line = std::to_string(monotonic_ns()) + "\t" + status.hash + "\t" + state + "\t" +
                     hex(reinterpret_cast<const std::uint8_t *>(detail.data()), detail.size()) + "\n";
-  const int fd = ::open(audit_path.c_str(), O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600);
+  const int fd = keryx::nexus::platform::io::open(audit_path.c_str(), O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600);
   if (fd < 0) throw std::runtime_error("cannot open persistent escrow selected-chain audit");
   bool ok = true;
   std::size_t offset = 0;
   while (offset < line.size()) {
-    const auto n = ::write(fd, line.data() + offset, line.size() - offset);
+    const auto n = keryx::nexus::platform::io::write(fd, line.data() + offset, line.size() - offset);
     if (n < 0 && errno == EINTR) continue;
     if (n <= 0) { ok = false; break; }
     offset += static_cast<std::size_t>(n);
   }
-  if (ok && ::fsync(fd) != 0) ok = false;
-  struct stat opened{};
-  if (::fstat(fd, &opened) != 0 || !S_ISREG(opened.st_mode) || (opened.st_mode & 0077) != 0) ok = false;
-  const int close_result = ::close(fd);
+  if (ok && keryx::nexus::platform::io::fsync(fd) != 0) ok = false;
+  keryx::nexus::platform::io::Stat opened{};
+  if (keryx::nexus::platform::io::fstat(fd, &opened) != 0 || !S_ISREG(opened.st_mode) || (opened.st_mode & 0077) != 0) ok = false;
+  const int close_result = keryx::nexus::platform::io::close(fd);
   if (!ok || close_result != 0) throw std::runtime_error("persistent escrow selected-chain audit write failed");
 }
 
@@ -390,14 +408,14 @@ fs::path prepare_nexus_escrow_state() {
     try {
       copy_file_durable_new(backup / "stock-state.journal", journal,
           "516db87538ba0b2d226946f556b2a6b00f7defee27660c31ae649113136cfa9b");
-    } catch (...) { (void)::unlink(state.c_str()); throw; }
+    } catch (...) { (void)keryx::nexus::platform::io::unlink(state.c_str()); throw; }
     std::cout << "ESCROW_IMPORT=PASS source=verified_read_only_backup destination=nexus_private_state originals_modified=false\n" << std::flush;
   }
   if (sha256_file(state).empty() || sha256_file(journal).empty())
     throw std::runtime_error("NEXUS escrow snapshot/journal failed readable integrity check");
-  struct stat state_stat{}, journal_stat{};
-  if (::lstat(state.c_str(), &state_stat) != 0 || !S_ISREG(state_stat.st_mode) || S_ISLNK(state_stat.st_mode) ||
-      (state_stat.st_mode & 0077) != 0 || ::lstat(journal.c_str(), &journal_stat) != 0 ||
+  keryx::nexus::platform::io::Stat state_stat{}, journal_stat{};
+  if (keryx::nexus::platform::io::lstat(state.c_str(), &state_stat) != 0 || !S_ISREG(state_stat.st_mode) || S_ISLNK(state_stat.st_mode) ||
+      (state_stat.st_mode & 0077) != 0 || keryx::nexus::platform::io::lstat(journal.c_str(), &journal_stat) != 0 ||
       !S_ISREG(journal_stat.st_mode) || S_ISLNK(journal_stat.st_mode) || (journal_stat.st_mode & 0077) != 0)
     throw std::runtime_error("NEXUS escrow state permissions or file identity are unsafe");
   return state;
@@ -1243,16 +1261,16 @@ int main(int argc,char **argv) {
               startup_backfill_done.load(std::memory_order_acquire)&&!escrow_watcher->validation_in_progress()&&
               ai::escrow_claim_check_due(now,next_claim_check_ns.load(std::memory_order_acquire),unix_now,last_claim_check_unix)&&!stop.load(std::memory_order_relaxed);
           if(claim_check) {
-            const auto temporary=claim_cadence_file.string()+".new."+std::to_string(::getpid());
-            const int fd=::open(temporary.c_str(),O_WRONLY|O_CREAT|O_EXCL|O_CLOEXEC|O_NOFOLLOW,0600);
+            const auto temporary=claim_cadence_file.string()+".new."+std::to_string(keryx::nexus::platform::io::getpid());
+            const int fd=keryx::nexus::platform::io::open(temporary.c_str(),O_WRONLY|O_CREAT|O_EXCL|O_CLOEXEC|O_NOFOLLOW,0600);
             if(fd<0)throw std::runtime_error("cannot persist escrow claim check cadence");
             const auto text=std::to_string(unix_now)+"\n";
-            const bool written=::write(fd,text.data(),text.size())==static_cast<ssize_t>(text.size())&&::fsync(fd)==0;
-            ::close(fd);if(!written){::unlink(temporary.c_str());throw std::runtime_error("escrow claim cadence write failed");}
-            fs::rename(temporary,claim_cadence_file);
-            const int dirfd=::open(claim_cadence_file.parent_path().c_str(),O_RDONLY|O_DIRECTORY|O_CLOEXEC);
+            const bool written=keryx::nexus::platform::io::write(fd,text.data(),text.size())==static_cast<ssize_t>(text.size())&&keryx::nexus::platform::io::fsync(fd)==0;
+            keryx::nexus::platform::io::close(fd);if(!written){keryx::nexus::platform::io::unlink(temporary.c_str());throw std::runtime_error("escrow claim cadence write failed");}
+            keryx::nexus::platform::io::replace(temporary,claim_cadence_file);
+            const int dirfd=keryx::nexus::platform::io::open(claim_cadence_file.parent_path().c_str(),O_RDONLY|O_DIRECTORY|O_CLOEXEC);
             if(dirfd<0)throw std::runtime_error("claim cadence directory unavailable");
-            const bool synced=::fsync(dirfd)==0;::close(dirfd);if(!synced)throw std::runtime_error("claim cadence directory sync failed");
+            const bool synced=keryx::nexus::platform::io::fsync(dirfd)==0;keryx::nexus::platform::io::close(dirfd);if(!synced)throw std::runtime_error("claim cadence directory sync failed");
             last_claim_check_unix=unix_now;
           }
           // Discovery stays active on every block. Only one stock claim-selection
@@ -1296,11 +1314,11 @@ int main(int argc,char **argv) {
               {std::lock_guard lock(claim_ids_mutex);if(own_claim_ids.size()>=10000&&!own_claim_ids.contains(id))throw std::runtime_error("bounded claim history exhausted");own_claim_ids.insert(id);}
               const auto record=[&](std::string_view stage,std::string_view detail={}) {
                 const std::string line="{\"event\":\"ESCROW_CLAIM_SUBMISSION\",\"state\":\""+std::string(stage)+"\",\"txid\":\""+id+"\",\"inputs\":"+std::to_string(tx.inputs_size())+",\"payout_sompi\":"+std::to_string(tx.outputs(0).amount())+",\"fee_sompi\":30000000,\"observed_monotonic_ns\":"+std::to_string(monotonic_ns())+",\"detail_hex\":\""+hex(reinterpret_cast<const std::uint8_t*>(detail.data()),detail.size())+"\"}\n";
-                const int fd=::open(claim_journal.c_str(),O_WRONLY|O_APPEND|O_CREAT|O_CLOEXEC|O_NOFOLLOW,0600);
+                const int fd=keryx::nexus::platform::io::open(claim_journal.c_str(),O_WRONLY|O_APPEND|O_CREAT|O_CLOEXEC|O_NOFOLLOW,0600);
                 if(fd<0)throw std::runtime_error("cannot open durable claim submission journal");
                 std::size_t done=0;bool ok=true;
-                while(done<line.size()){const auto n=::write(fd,line.data()+done,line.size()-done);if(n<0&&errno==EINTR)continue;if(n<=0){ok=false;break;}done+=static_cast<std::size_t>(n);}
-                if(ok)ok=::fsync(fd)==0;::close(fd);
+                while(done<line.size()){const auto n=keryx::nexus::platform::io::write(fd,line.data()+done,line.size()-done);if(n<0&&errno==EINTR)continue;if(n<=0){ok=false;break;}done+=static_cast<std::size_t>(n);}
+                if(ok)ok=keryx::nexus::platform::io::fsync(fd)==0;keryx::nexus::platform::io::close(fd);
                 if(!ok)throw std::runtime_error("cannot persist claim submission stage");
                 std::osyncstream(std::cout)<<line<<std::flush;
               };
