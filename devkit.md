@@ -64,7 +64,7 @@ checks; a below-threshold pool may correctly produce no claim.
 | macOS | No validated build. No NVIDIA CUDA backend; POSIX/Linux differences and Vulkan availability require platform work. The presence of Tauri platform conditionals is not full miner support. |
 
 Compile for your own platform and toolchain. No OS support claim should be
-inferred from the repository being source-only. The existing native CUDA kernels
+inferred from successful CPU compilation alone. The existing native CUDA kernels
 target SM 8.6 and use generated portable C++ device images. Vulkan admission retains
 specific vendor/device and feature checks: changing a UUID does not add support
 for a new GPU model. Vendor options in the UI are broader than tested execution.
@@ -257,7 +257,7 @@ to `SECURITY.md` for scanner requirements, reviewed exceptions and publication.
 
 ## Native distribution work
 
-The Windows workflow builds native executables, tests file/process adapters and
+The native workflow builds Windows and Linux executables, tests file/process adapters and
 assembles a CLI preview with matching inference runtime, verifier, dependency
 notices, exact source commit and checksums. See `docs/windows.md`.
 `tools/package_release.py` copies only named build outputs; runtime data is never

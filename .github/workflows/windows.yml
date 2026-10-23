@@ -14,6 +14,7 @@ jobs:
   source:
     uses: ./.github/workflows/source-gates.yml
   cpu:
+    name: Windows x64
     needs: source
     runs-on: windows-2022
     timeout-minutes: 120
@@ -29,9 +30,9 @@ jobs:
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: .local/vcpkg-cache
-          key: windows-vcpkg-${{ hashFiles('tools/windows/vcpkg.json') }}-v2-${{ github.sha }}
+          key: windows-vcpkg-${{ hashFiles('tools/windows/vcpkg.json', 'tools/cmake/triplets/*.cmake') }}-v2-${{ github.sha }}
           restore-keys: |
-            windows-vcpkg-${{ hashFiles('tools/windows/vcpkg.json') }}-v2-
+            windows-vcpkg-${{ hashFiles('tools/windows/vcpkg.json', 'tools/cmake/triplets/*.cmake') }}-v2-
             windows-vcpkg-
       - name: Pinned Windows dependencies
         shell: pwsh
@@ -51,7 +52,7 @@ jobs:
         run: |
           cmake -S . -B build/windows -A x64 `
             -DCMAKE_TOOLCHAIN_FILE="$pwd/.local/vcpkg/scripts/buildsystems/vcpkg.cmake" `
-            -DVCPKG_MANIFEST_DIR="$pwd/tools/windows" `
+            -DVCPKG_MANIFEST_DIR="$pwd/tools/windows" -DVCPKG_OVERLAY_TRIPLETS="$pwd/tools/cmake/triplets" `
             -DVCPKG_TARGET_TRIPLET=x64-windows-static-md `
             -DNEXUS_ENABLE_GRPC=OFF -DNEXUS_ENABLE_CUDA=OFF -DNEXUS_ENABLE_VULKAN_JIT=OFF
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
@@ -71,12 +72,12 @@ jobs:
         run: |
           cmake -S . -B build/windows-worker -A x64 `
             -DCMAKE_TOOLCHAIN_FILE="$pwd/.local/vcpkg/scripts/buildsystems/vcpkg.cmake" `
-            -DVCPKG_MANIFEST_DIR="$pwd/tools/windows" `
+            -DVCPKG_MANIFEST_DIR="$pwd/tools/windows" -DVCPKG_OVERLAY_TRIPLETS="$pwd/tools/cmake/triplets" `
             -DVCPKG_TARGET_TRIPLET=x64-windows-static-md -DVCPKG_MANIFEST_FEATURES=worker `
             -DNEXUS_ENABLE_GRPC=ON -DNEXUS_ENABLE_CUDA=ON -DNEXUS_ENABLE_VULKAN_JIT=OFF -DBUILD_TESTING=OFF
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Build Windows worker
-        run: cmake --build build/windows-worker --config Release --target nexus-live-cuda-worker --parallel 2
+        run: cmake --build build/windows-worker --config Release --target nexus-live-cuda-worker nexus-native-header-parity-test nexus-ai-service-test nexus-ai-journal-archive-test --parallel 2
       - name: Worker capability smoke check (no GPU)
         run: build/windows-worker/bin/Release/nexus-live-cuda-worker.exe --inference-capabilities
       - name: Fetch unmodified pinned oracle dependency
@@ -99,6 +100,17 @@ jobs:
             & oracle-rust/target/release/nexus-m21-oracle.exe $mode build/windows/test-data/cpp-proof.bin
             if ($LASTEXITCODE) { exit $LASTEXITCODE }
           }
+      - name: Native header hashes and journal recovery
+        shell: pwsh
+        run: |
+          & oracle-rust/target/release/nexus-m21-oracle.exe header build/windows/test-data/official-header.bin
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & build/windows-worker/bin/Release/nexus-native-header-parity-test.exe build/windows/test-data/official-header.bin
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & build/windows-worker/bin/Release/nexus-ai-service-test.exe "$pwd/build/windows/test-data/ai-service"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & build/windows-worker/bin/Release/nexus-ai-journal-archive-test.exe
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Build matching inference runtime
         shell: pwsh
         run: |
@@ -140,9 +152,10 @@ jobs:
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: .local/vcpkg-cache
-          key: windows-vcpkg-${{ hashFiles('tools/windows/vcpkg.json') }}-v2-${{ github.sha }}
+          key: windows-vcpkg-${{ hashFiles('tools/windows/vcpkg.json', 'tools/cmake/triplets/*.cmake') }}-v2-${{ github.sha }}
 
   linux:
+    name: Linux x86-64
     needs: source
     runs-on: ubuntu-24.04
     timeout-minutes: 120
@@ -158,9 +171,9 @@ jobs:
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: .local/vcpkg-cache
-          key: linux-vcpkg-${{ hashFiles('tools/windows/vcpkg.json') }}-v2-${{ github.sha }}
+          key: linux-vcpkg-${{ hashFiles('tools/windows/vcpkg.json', 'tools/cmake/triplets/*.cmake') }}-v2-${{ github.sha }}
           restore-keys: |
-            linux-vcpkg-${{ hashFiles('tools/windows/vcpkg.json') }}-v2-
+            linux-vcpkg-${{ hashFiles('tools/windows/vcpkg.json', 'tools/cmake/triplets/*.cmake') }}-v2-
             linux-vcpkg-
       - name: Native build prerequisites
         run: |
@@ -188,7 +201,7 @@ jobs:
           set -euo pipefail
           cmake -S . -B build/linux-worker -G Ninja -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_TOOLCHAIN_FILE="$PWD/.local/vcpkg/scripts/buildsystems/vcpkg.cmake" \
-            -DVCPKG_MANIFEST_DIR="$PWD/tools/windows" -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_DIR="$PWD/tools/windows" -DVCPKG_OVERLAY_TRIPLETS="$PWD/tools/cmake/triplets" -DVCPKG_TARGET_TRIPLET=x64-linux \
             -DVCPKG_MANIFEST_FEATURES=worker -DNEXUS_ENABLE_GRPC=ON -DNEXUS_ENABLE_CUDA=ON \
             -DNEXUS_ENABLE_VULKAN_JIT=OFF -DBUILD_TESTING=OFF
           cmake --build build/linux-worker --target nexus-live-cuda-worker --parallel 2
@@ -200,7 +213,7 @@ jobs:
           set -euo pipefail
           cmake -S . -B build/linux-cpu -G Ninja -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_TOOLCHAIN_FILE="$PWD/.local/vcpkg/scripts/buildsystems/vcpkg.cmake" \
-            -DVCPKG_MANIFEST_DIR="$PWD/tools/windows" -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_DIR="$PWD/tools/windows" -DVCPKG_OVERLAY_TRIPLETS="$PWD/tools/cmake/triplets" -DVCPKG_TARGET_TRIPLET=x64-linux \
             -DNEXUS_RUST_ORACLE="$PWD/oracle-rust/target/release/nexus-m21-oracle"
           cmake --build build/linux-cpu --parallel 2
           ctest --test-dir build/linux-cpu --output-on-failure
@@ -231,7 +244,7 @@ jobs:
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: .local/vcpkg-cache
-          key: linux-vcpkg-${{ hashFiles('tools/windows/vcpkg.json') }}-v2-${{ github.sha }}
+          key: linux-vcpkg-${{ hashFiles('tools/windows/vcpkg.json', 'tools/cmake/triplets/*.cmake') }}-v2-${{ github.sha }}
   publish:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [source, cpu, linux]

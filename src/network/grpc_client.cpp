@@ -1300,13 +1300,11 @@ bool probe_local_ipfs_api(std::chrono::milliseconds timeout) {
       "Content-Length: 0\r\nConnection: close\r\n\r\n";
   std::size_t sent = 0;
   while (sent < sizeof(request) - 1) {
-    const auto n = ::send(fd, request + sent, static_cast<int>(sizeof(request) - 1 - sent),
 #ifdef _WIN32
-      0
+    const auto n = ::send(fd, request + sent, static_cast<int>(sizeof(request) - 1 - sent), 0);
 #else
-      MSG_NOSIGNAL
+    const auto n = ::send(fd, request + sent, sizeof(request) - 1 - sent, MSG_NOSIGNAL);
 #endif
-      );
     if (n <= 0) return false;
     sent += static_cast<std::size_t>(n);
   }
