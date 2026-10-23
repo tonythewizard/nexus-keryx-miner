@@ -66,7 +66,10 @@ inline bool private_descriptor(LocalMemory& descriptor) {
   LocalMemory sid_text;
   if(!ConvertSidToStringSidW(reinterpret_cast<TOKEN_USER*>(storage.data())->User.Sid,
     reinterpret_cast<LPWSTR*>(&sid_text.value))) return false;
-  const std::wstring acl=L"D:P(A;;FA;;;"+std::wstring(static_cast<wchar_t*>(sid_text.value))+L")(A;;FA;;;SY)";
+  const std::wstring sid=static_cast<wchar_t*>(sid_text.value);
+  // Elevated tokens can default the owner to Administrators. Set the actual
+  // token owner explicitly so the ownership check remains meaningful.
+  const std::wstring acl=L"O:"+sid+L"D:P(A;;FA;;;"+sid+L")(A;;FA;;;SY)";
   if(!ConvertStringSecurityDescriptorToSecurityDescriptorW(
     acl.c_str(),SDDL_REVISION_1,
     reinterpret_cast<PSECURITY_DESCRIPTOR*>(&descriptor.value),nullptr)) return false;

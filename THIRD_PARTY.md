@@ -39,3 +39,21 @@ Cargo lockfiles record additional dependencies and their upstream locations.
 GPU drivers, toolkits, inference runtime libraries and model weights are external
 dependencies, not repository contents. The BDA shader is recovered SPIR-V
 assembly, rather than an assertion that its original high-level source is present.
+
+## Native preview build inputs
+
+The native Windows preview also builds the public BLAKE2b reference source from
+libb2 commit `2c5142f12a2cd52f3ee0a43e50a3a76f75badf85` (CC0), and
+llama.cpp commit `12127defda4f41b7679cb2477a4b0d65ee6a0c8f` / b10015
+(MIT), applying the retained Keryx canonical trace patch. Archive hashes and
+build options are in `tools/cmake/blake2-reference.cmake` and
+`tools/runtime/CMakeLists.txt`. Vcpkg inputs are pinned by
+`tools/windows/vcpkg.json`; its installed notices accompany packaged components.
+
+The preview packager selects the CUDA runtime and cuBLAS redistributables from
+the matching toolkit and includes its NVIDIA EULA. Those DLLs remain subject to
+their own terms; they are not GPL-licensed project code. NVIDIA drivers are
+neither copied nor bundled. Microsoft runtime DLLs, when included, retain their
+own redistribution terms. Original project source is identified by the exact
+Git commit in `BUILD.json`; source tags and the pinned public dependency inputs
+provide the corresponding build sources. No model license is implied.
