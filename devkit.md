@@ -7,9 +7,10 @@ build definitions. It has a fresh Git history and no installation state. It is
 not a portable binary release or a copy of a running installation. `VERSION`
 describes the source baseline; it does not certify a newly compiled executable.
 
-For an agent: read `AGENTS.md` and `SECURITY.md`, locate the subsystem below,
-inspect its implementation and tests, then run the smallest relevant checks.
-Builds and tests must not start mining, use a production GPU or change wallets.
+Before changing code, read the relevant subsystem and its tests, then run the
+smallest checks that cover the change. Builds and offline tests must not start
+mining, use a production GPU or change wallets. Automation-specific guidance
+is kept in `AGENTS.md`.
 
 ## Architecture and ownership
 
@@ -34,7 +35,7 @@ Builds and tests must not start mining, use a production GPU or change wallets.
 | Setup/wallet | `scripts/nexus_setup.py`, `nexus_wallet_authorization.py`: private profiles, certificate verification and identity protection |
 | API/MCP | `scripts/nexus_agent_api.py`, `nexus_mcp.py`, `nexus_mcp_control.py`, `agent_web/`: scoped commands, loopback endpoints and private authentication |
 | Service controls | `scripts/nexus_restart_workers.py`, `nexus_stop_workers.py`, `nexus_desktop_commands.py`: Linux service integration and cooperative lifecycle checks |
-| Notifications/updates | `scripts/nexus_notifications.py`, `nexus_updates.py`: notification policy and optional legacy binary-release update code; updates default OFF in this source distribution |
+| Notifications/updates | `scripts/nexus_notifications.py`, `nexus_updates.py`: notification policy and legacy release updater. Its private-repository precondition is incompatible with this public source repository; do not enable it for this distribution |
 | Experiments | `experiments/`: probes and performance/reference work, not separate production backends or automatic build acceptance |
 | Wire formats | `proto/current/`, `proto/v057/`: generated C++ interfaces come from these definitions at build time |
 | Dependencies | `vendor/` and `THIRD_PARTY.md`: vendored source, pinned upstream metadata and retained notices |
@@ -218,12 +219,15 @@ autostart configuration are shipped. Configure and validate a private service
 adapter before using restart/stop/setup controls against a real installation.
 
 The API defaults to loopback port 3340; MCP uses 3341 and separate enable state.
-Authentication keys are generated into private local storage, never Git. Do not
+The current generated agent key grants diagnostics, development and live
+control scopes together. Treat it as a privileged credential stored in private
+local storage, never Git. Do not
 publish credentials or expose listeners remotely as part of a source build.
-Automatic binary updates default OFF: this repository distributes source, not
-release manifests or runtime executables. Prefer a reviewed source update and
-fresh build. Older probe/control modules may still expect an installation's
-artifact layout; they are not a portable installer.
+Automatic binary updates default OFF. The updater requires an authenticated
+*private* GitHub repository, so update checks cannot succeed against this
+public source repository. Leave updates disabled; use reviewed source updates
+and a fresh build. The update UI is not a portable installer. Older controllers
+may still expect an installation-specific artifact layout.
 
 ## Tests and reporting
 
