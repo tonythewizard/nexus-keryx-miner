@@ -53,7 +53,7 @@ def main():
         for pattern in patterns:
             libraries = sorted(p for p in args.cuda_dir.glob(pattern) if p.is_file() and not p.is_symlink())
             if len(libraries) != 1:
-                raise ValueError(f'Expected one CUDA runtime per pattern: {pattern}')
+                raise ValueError(f'Expected one CUDA runtime for {pattern} in {args.cuda_dir}; found {len(libraries)}')
             destination = None
             if not windows:
                 destination = re.match(r'(lib.+\.so\.\d+)', libraries[0].name).group(1)

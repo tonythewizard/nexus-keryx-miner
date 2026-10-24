@@ -62,6 +62,27 @@ class Release(unittest.TestCase):
         subprocess.run(args + ['--cuda-license', str(installed)], check=True, capture_output=True)
         self.assertEqual(len(list((self.root / 'out').glob('*.zip'))), 1)
 
+    def test_cuda13_windows_x64_layout_and_toolkit_root_license(self):
+        args = self.package_inputs()
+        binaries = self.root / 'cuda/bin'
+        (binaries / 'x64').mkdir()
+        for library in binaries.glob('*.dll'):
+            library.rename(binaries / 'x64' / library.name)
+        # Driver DLLs and unrequested toolkit components remain excluded.
+        for name in ('nvcuda.dll', 'nvrtc64_130_0.dll'):
+            (binaries / 'x64' / name).write_bytes(b'excluded fixture')
+        args[args.index('--cuda-dir') + 1] = str(binaries / 'x64')
+        subprocess.run(args + ['--cuda-license', str(self.root / 'cuda/EULA.txt')],
+                       check=True, capture_output=True)
+        archive = next((self.root / 'out').glob('*.zip'))
+        with zipfile.ZipFile(archive) as packed:
+            dlls = {Path(name).name for name in packed.namelist() if name.endswith('.dll')}
+            self.assertEqual(dlls, {'keryx-llama.dll', 'cudart64_13.dll',
+                                   'cublas64_13.dll', 'cublasLt64_13.dll'})
+            license_name = next(name for name in packed.namelist()
+                                if name.endswith('/licenses/NVIDIA-CUDA-EULA.txt'))
+            self.assertEqual(packed.read(license_name), (self.root / 'cuda/EULA.txt').read_bytes())
+
     def test_missing_runtime_blocks_archive(self):
         args = self.package_inputs()
         (self.root / 'cuda/bin/cublasLt64_13.dll').unlink()

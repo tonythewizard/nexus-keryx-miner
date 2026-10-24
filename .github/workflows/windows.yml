@@ -159,7 +159,8 @@ jobs:
           python tools/package_release.py --platform windows `
             --worker-dir build/windows-worker/bin/Release `
             --oracle oracle-rust/target/release/nexus-m21-oracle.exe `
-            --runtime-dir build/runtime-install --cuda-dir "$env:CUDA_PATH/bin" --crt-dir "$($crt.FullName)" --inspector "$($dumpbin.FullName)"
+            --runtime-dir build/runtime-install --cuda-dir "$env:CUDA_PATH/bin/x64" `
+            --cuda-license "$env:CUDA_PATH/EULA.txt" --crt-dir "$($crt.FullName)" --inspector "$($dumpbin.FullName)"
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Upload Windows preview and checksums
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
