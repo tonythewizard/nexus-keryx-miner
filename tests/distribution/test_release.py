@@ -90,6 +90,31 @@ class Release(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(list((self.root / 'out').glob('*.zip')))
 
+    def test_cuda_pdf_license_is_preserved_without_installed_eula(self):
+        args = self.package_inputs()
+        (self.root / 'cuda/EULA.txt').unlink()
+        license_file = self.root / 'EULA.pdf'
+        pdf = b'%PDF-1.5\nsynthetic license fixture\n%%EOF\n'
+        license_file.write_bytes(pdf)
+        subprocess.run(args + ['--cuda-license', str(license_file)], check=True, capture_output=True)
+        archive = next((self.root / 'out').glob('*.zip'))
+        with zipfile.ZipFile(archive) as packed:
+            license_name = next(name for name in packed.namelist()
+                                if name.endswith('/licenses/NVIDIA-CUDA-EULA.pdf'))
+            self.assertEqual(packed.read(license_name), pdf)
+            self.assertFalse(any(name.endswith('/licenses/NVIDIA-CUDA-EULA.txt')
+                                 for name in packed.namelist()))
+            sums = packed.read(next(name for name in packed.namelist()
+                                    if name.endswith('/SHA256SUMS'))).decode()
+            self.assertIn(hashlib.sha256(pdf).hexdigest() + '  licenses/NVIDIA-CUDA-EULA.pdf', sums)
+
+    def test_missing_cuda_license_blocks_archive(self):
+        args = self.package_inputs()
+        (self.root / 'cuda/EULA.txt').unlink()
+        result = subprocess.run(args, capture_output=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(list((self.root / 'out').glob('*.zip')))
+
     def test_launcher_requires_profile_and_explicit_live_authorization(self):
         ext = '.exe' if os.name == 'nt' else ''
         for name in ('nexus-live-cuda-worker' + ext, 'nexus-m21-oracle' + ext,

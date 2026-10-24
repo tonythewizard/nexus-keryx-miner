@@ -27,6 +27,15 @@ jobs:
           persist-credentials: false
       - name: Canonical trace patch checkout regression
         run: python -m unittest discover -s tests/distribution -p test_runtime_patch.py -v
+      - name: Fetch pinned CUDA 13.0.2 license
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force build/cuda-license | Out-Null
+          Invoke-WebRequest -Uri 'https://docs.nvidia.com/cuda/archive/13.0.2/pdf/EULA.pdf' -OutFile build/cuda-license/EULA.pdf
+          $digest = (Get-FileHash build/cuda-license/EULA.pdf -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($digest -ne 'c365e3bfe9ed70d7fb7dbacc4fdd4b4a15fb951be5440f0f6bd95e3c935e93ef') {
+            throw 'Pinned CUDA license checksum mismatch'
+          }
       - name: Restore compiled dependencies
         id: depcache
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
@@ -160,7 +169,7 @@ jobs:
             --worker-dir build/windows-worker/bin/Release `
             --oracle oracle-rust/target/release/nexus-m21-oracle.exe `
             --runtime-dir build/runtime-install --cuda-dir "$env:CUDA_PATH/bin/x64" `
-            --cuda-license "$env:CUDA_PATH/EULA.txt" --crt-dir "$($crt.FullName)" --inspector "$($dumpbin.FullName)"
+            --cuda-license build/cuda-license/EULA.pdf --crt-dir "$($crt.FullName)" --inspector "$($dumpbin.FullName)"
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Upload Windows preview and checksums
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
