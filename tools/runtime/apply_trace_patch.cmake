@@ -10,7 +10,10 @@ get_filename_component(nexus_source_parent "${NEXUS_LLAMA_SOURCE}" DIRECTORY)
 set(nexus_apply_command "${CMAKE_COMMAND}" -E env
   --unset=GIT_DIR --unset=GIT_WORK_TREE --unset=GIT_INDEX_FILE
   "GIT_CEILING_DIRECTORIES=${nexus_source_parent}"
-  "${GIT_EXECUTABLE}" -C "${NEXUS_LLAMA_SOURCE}" apply)
+  # The archive is LF; ignore the host's Windows checkout conversion settings
+  # for both applying the patch and verifying the resulting source bytes.
+  "${GIT_EXECUTABLE}" -c core.autocrlf=false -c core.eol=lf
+  -C "${NEXUS_LLAMA_SOURCE}" apply)
 function(nexus_trace_patch_verified output)
   if(NOT EXISTS "${NEXUS_LLAMA_SOURCE}/ggml/src/ggml-cuda/q8canon.cu" OR
      NOT EXISTS "${NEXUS_LLAMA_SOURCE}/ggml/src/ggml-cuda/q8canon.cuh")
