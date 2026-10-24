@@ -4,7 +4,7 @@
 
 Nexus brings Keryx mining, AI service status, wallet authorization, escrow monitoring and GPU telemetry into a single Linux desktop application. The mining engine is primarily C++20 with CUDA support; Rust components handle independent verification and signing-related work, while Python provides local control and presentation services. The desktop is built with Tauri.
 
-> **Project status — 0.0.3 beta.** Linux x86-64 remains the development baseline. A **native Windows x64 CUDA CLI preview** is being built and tested on GitHub Actions; GPU execution on Windows is not yet validated. H15 support remains incomplete. Models, Merkle trees, keys and private installation state are external inputs.
+> **Project status — 0.0.3 beta.** Linux x86-64 remains the development baseline. A **native Windows x64 CUDA CLI preview** is developed and tested on GitHub Actions; GPU execution on Windows is not yet validated. H15 support remains incomplete. Models, Merkle trees, keys and private installation state are external inputs.
 
 ![Nexus desktop overview](docs/screenshots/hero-overview.png)
 
@@ -25,7 +25,7 @@ The [Native CLI workflow](https://github.com/tonythewizard/nexus-keryx-miner/act
 builds Windows and Linux executables, the Rust verifier and matching inference
 runtime, runs CPU/API tests and packages ZIP/tar.gz archives with runtime dependencies, licenses and SHA-256 checksums.
 Successful workflow runs provide the preview under **Artifacts**. Tagged downloads
-will appear on the [Releases page](https://github.com/tonythewizard/nexus-keryx-miner/releases).
+appear on the [Releases page](https://github.com/tonythewizard/nexus-keryx-miner/releases).
 Only a completed packaging job produces a downloadable binary archive.
 
 | Distribution | Scope |
