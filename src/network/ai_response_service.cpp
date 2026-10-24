@@ -1,3 +1,4 @@
+#include "keryx/nexus/platform/io.hpp"
 #include "keryx/nexus/ai_response_service.hpp"
 #include <chrono>
 #include <utility>
@@ -10,18 +11,20 @@
 #include <grpcpp/grpcpp.h>
 
 #include <algorithm>
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
 #include <arpa/inet.h>
+#endif
 #include <cerrno>
 #include <chrono>
 #include <cstring>
-#include <fcntl.h>
 #include <fstream>
 #include <iostream>
 #include <limits>
 #include <memory>
 #include <stdexcept>
-#include <sys/stat.h>
-#include <unistd.h>
 #include <zlib.h>
 
 extern "C" {
@@ -329,17 +332,17 @@ void ResponseJournal::append_locked(const ResponseJournalRecord &record) {
   std::filesystem::create_directories(path_.parent_path());
   const auto body = state_field(record);
   const auto line = body + "|" + sha256_hex(body) + "\n";
-  const int fd = ::open(path_.c_str(), O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0600);
+  const int fd = keryx::nexus::platform::io::open(path_.c_str(), O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0600);
   if (fd < 0) throw std::runtime_error("cannot open AiResponse journal");
   std::size_t offset = 0;
   while (offset < line.size()) {
-    const auto n = ::write(fd, line.data() + offset, line.size() - offset);
+    const auto n = keryx::nexus::platform::io::write(fd, line.data() + offset, line.size() - offset);
     if (n < 0 && errno == EINTR) continue;
-    if (n <= 0) { ::close(fd); throw std::runtime_error("AiResponse journal write failed"); }
+    if (n <= 0) { keryx::nexus::platform::io::close(fd); throw std::runtime_error("AiResponse journal write failed"); }
     offset += static_cast<std::size_t>(n);
   }
-  if (::fsync(fd) != 0) { ::close(fd); throw std::runtime_error("AiResponse journal fsync failed"); }
-  ::close(fd);
+  if (keryx::nexus::platform::io::fsync(fd) != 0) { keryx::nexus::platform::io::close(fd); throw std::runtime_error("AiResponse journal fsync failed"); }
+  keryx::nexus::platform::io::close(fd);
 }
 
 int stock_open_request(std::span<const std::uint8_t> payload, const std::array<std::uint8_t, 32> &secret,

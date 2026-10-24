@@ -30,3 +30,6 @@ tonic-build = { version = "0.8", default-features = false, features = ["prost"] 
 [dev-dependencies]
 anyhow = "1"
 keryx-verifiable-inference = { path = "../vendor/keryx-verifiable-inference", features = ["testkit"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Storage_FileSystem"] }

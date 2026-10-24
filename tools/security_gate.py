@@ -20,10 +20,11 @@ AREAS = {"src", "include", "consensus", "ai-response-bridge", "oracle-rust",
          "vendor", "proto", "nexus-ui-desktop", "experiments", "scripts",
          "tests", "tools", ".github", ".githooks", "docs"}
 ROOT_FILES = {"README.md", "devkit.md", "AGENTS.md", "SECURITY.md", "THIRD_PARTY.md",
-              "VERSION", "LICENSE", "CMakeLists.txt", ".gitignore", ".gitleaks.toml"}
+              "VERSION", "LICENSE", "CMakeLists.txt", ".gitignore", ".gitleaks.toml",
+              ".gitattributes"}
 SUFFIXES = {".cpp", ".hpp", ".h", ".c", ".cu", ".cuh", ".rs", ".py", ".fish",
             ".sh", ".toml", ".lock", ".json", ".proto", ".html", ".css", ".js",
-            ".cjs", ".svg", ".spvasm", ".hex", ".md", ".txt", ".yml", ".yaml", ".inc"}
+            ".cjs", ".svg", ".spvasm", ".hex", ".md", ".txt", ".yml", ".yaml", ".inc", ".cmake", ".manifest"}
 FORBIDDEN_PARTS = {"state", "logs", "cache", "artifacts", "models", "handoff",
                    "agent-api", "node_modules", "target", "build", ".aws", ".codex", ".ssh", "_deps"}
 SYNTHETIC_UUID = "GPU-00000000-0000-0000-0000-000000000000"

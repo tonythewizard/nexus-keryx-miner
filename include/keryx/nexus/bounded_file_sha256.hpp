@@ -5,12 +5,16 @@
 #include <cerrno>
 #include <cstdint>
 #include <cstdlib>
+#ifndef _WIN32
 #include <fcntl.h>
+#endif
 #include <memory>
 #include <stdexcept>
 #include <string>
+#ifndef _WIN32
 #include <sys/stat.h>
 #include <unistd.h>
+#endif
 
 namespace keryx::nexus {
 
@@ -20,12 +24,20 @@ struct FileHashIoStats {
   bool direct_io{};
 };
 
+} // namespace keryx::nexus
+#ifdef _WIN32
+#include "keryx/nexus/platform/windows_sha256.hpp"
+#endif
+namespace keryx::nexus {
 // Hash every byte without populating the host's cache with a multi-GiB model.
 // O_DIRECT changes only this read descriptor. Unsupported filesystems use
 // bounded reads with completed-range cache advice; never skip verification.
 inline std::string bounded_file_sha256(const std::string &path,
                                       FileHashIoStats *stats = nullptr,
                                       bool prefer_direct = true) {
+#ifdef _WIN32
+  return windows_file_sha256(path,stats,prefer_direct);
+#else
   struct File {
     int fd{-1};
     ~File() { if (fd >= 0) ::close(fd); }
@@ -119,6 +131,7 @@ inline std::string bounded_file_sha256(const std::string &path,
   }
   if (stats) *stats = io;
   return result;
+#endif
 }
 
 } // namespace keryx::nexus

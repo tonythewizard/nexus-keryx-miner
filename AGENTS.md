@@ -3,7 +3,7 @@
 Read `devkit.md`, then `SECURITY.md`, before changing this project. Read the
 specific module and its tests instead of searching unrelated machine data.
 
-- This is a source-only developer repository. Keep runtime data and local
+- This is a developer repository with experimental CLI build artifacts. Keep runtime data and local
   device profiles outside Git. Do not import other repositories' Git history.
 - Install hooks with `git config core.hooksPath .githooks`. Gitleaks is mandatory.
 - Run `python3 tools/security_gate.py` before staging selected files and

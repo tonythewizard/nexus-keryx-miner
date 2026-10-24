@@ -1,7 +1,6 @@
 use std::{
     fs::File,
     io::{Read, Seek, SeekFrom},
-    os::unix::fs::OpenOptionsExt,
     path::Path,
 };
 
@@ -296,11 +295,7 @@ pub fn verify(model: &Path, index: &Path) {
 
 impl CanonicalIndex {
     pub fn read_tiles(&self, model: &Path, offsets: &[u64]) -> Vec<[u8; 1024]> {
-        let mut opts = std::fs::OpenOptions::new();
-        opts.read(true)
-            .custom_flags(libc::O_CLOEXEC | libc::O_NOATIME);
-        let mut f = opts
-            .open(model)
+        let mut f = crate::platform::open_model(model)
             .expect("open model read-only for Rust tile audit");
         offsets
             .iter()

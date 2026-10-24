@@ -1,3 +1,4 @@
+#include "keryx/nexus/platform/io.hpp"
 #include "keryx/nexus/ai_service.hpp"
 
 #include "rpc.pb.h"
@@ -14,12 +15,9 @@
 #include <charconv>
 #include <cctype>
 #include <cstring>
-#include <fcntl.h>
 #include <fstream>
 #include <stdexcept>
 #include <string_view>
-#include <sys/stat.h>
-#include <unistd.h>
 
 namespace keryx::nexus::ai {
 namespace {
@@ -183,7 +181,7 @@ std::optional<PendingRecord> decode_record(std::string_view line) {
 
 void write_all(int fd, std::string_view text) {
   while (!text.empty()) {
-    const auto n = ::write(fd, text.data(), text.size());
+    const auto n = keryx::nexus::platform::io::write(fd, text.data(), text.size());
     if (n < 0 && errno == EINTR) continue;
     if (n <= 0) throw std::runtime_error("AI request journal write failed");
     text.remove_prefix(static_cast<std::size_t>(n));
@@ -417,16 +415,16 @@ std::size_t RequestJournal::size() const {
 void RequestJournal::persist_locked(const PendingRecord &changed) {
   std::filesystem::create_directories(path_.parent_path());
   const auto journal_path = std::filesystem::path(path_.string() + ".journal");
-  const int jfd = ::open(journal_path.c_str(), O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0600);
+  const int jfd = keryx::nexus::platform::io::open(journal_path.c_str(), O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0600);
   if (jfd < 0) throw std::runtime_error("cannot open AI request journal");
   try {
     write_all(jfd, encode_record(changed));
-    if (::fsync(jfd) != 0) throw std::runtime_error("AI request journal fsync failed");
-    ::close(jfd);
-  } catch (...) { ::close(jfd); throw; }
+    if (keryx::nexus::platform::io::fsync(jfd) != 0) throw std::runtime_error("AI request journal fsync failed");
+    keryx::nexus::platform::io::close(jfd);
+  } catch (...) { keryx::nexus::platform::io::close(jfd); throw; }
 
   const auto next = std::filesystem::path(path_.string() + ".new");
-  int fd = ::open(next.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+  int fd = keryx::nexus::platform::io::open(next.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
   if (fd < 0) throw std::runtime_error("cannot create AI request snapshot");
   try {
     std::vector<std::string> ordered;
@@ -434,21 +432,21 @@ void RequestJournal::persist_locked(const PendingRecord &changed) {
     for (const auto &[_, rec] : records_) ordered.push_back(encode_record(rec));
     std::sort(ordered.begin(), ordered.end());
     for (const auto &line : ordered) write_all(fd, line);
-    if (::fsync(fd) != 0) throw std::runtime_error("AI request snapshot fsync failed");
-    ::close(fd);
+    if (keryx::nexus::platform::io::fsync(fd) != 0) throw std::runtime_error("AI request snapshot fsync failed");
+    keryx::nexus::platform::io::close(fd);
     fd = -1;
-    if (::rename(next.c_str(), path_.c_str()) != 0) throw std::runtime_error("AI request snapshot atomic rename failed");
-    const int dfd = ::open(path_.parent_path().c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
-    if (dfd >= 0) { (void)::fsync(dfd); ::close(dfd); }
+    keryx::nexus::platform::io::replace(next, path_);
+    const int dfd = keryx::nexus::platform::io::open(path_.parent_path().c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (dfd >= 0) { (void)keryx::nexus::platform::io::fsync(dfd); keryx::nexus::platform::io::close(dfd); }
     // Snapshot is durable before log truncation. If a crash occurs between these operations,
     // replaying the old journal is idempotent because each line contains complete state.
-    const int compact_fd = ::open(journal_path.c_str(), O_WRONLY | O_TRUNC | O_CLOEXEC);
+    const int compact_fd = keryx::nexus::platform::io::open(journal_path.c_str(), O_WRONLY | O_TRUNC | O_CLOEXEC);
     if (compact_fd < 0) throw std::runtime_error("cannot compact AI request journal");
-    if (::fsync(compact_fd) != 0) { ::close(compact_fd); throw std::runtime_error("AI request journal compaction fsync failed"); }
-    ::close(compact_fd);
-    const int compact_dir = ::open(path_.parent_path().c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
-    if (compact_dir >= 0) { (void)::fsync(compact_dir); ::close(compact_dir); }
-  } catch (...) { if (fd >= 0) ::close(fd); throw; }
+    if (keryx::nexus::platform::io::fsync(compact_fd) != 0) { keryx::nexus::platform::io::close(compact_fd); throw std::runtime_error("AI request journal compaction fsync failed"); }
+    keryx::nexus::platform::io::close(compact_fd);
+    const int compact_dir = keryx::nexus::platform::io::open(path_.parent_path().c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (compact_dir >= 0) { (void)keryx::nexus::platform::io::fsync(compact_dir); keryx::nexus::platform::io::close(compact_dir); }
+  } catch (...) { if (fd >= 0) keryx::nexus::platform::io::close(fd); throw; }
 }
 
 std::optional<std::string> service_identity_from_payout(std::string_view address, std::string *why) {
