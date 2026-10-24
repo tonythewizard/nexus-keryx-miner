@@ -10,12 +10,17 @@
 #include <sstream>
 #include <stdexcept>
 #include <thread>
+#ifndef _WIN32
 #include <fcntl.h>
 #include <unistd.h>
+#endif
 namespace keryx::nexus {
 class ScopedFileCacheGuard final {
 public:
   ScopedFileCacheGuard() {
+#ifdef _WIN32
+    throw std::runtime_error("Linux cgroup cache guard is unavailable on Windows");
+#else
     std::ifstream input("/proc/self/cgroup");std::string line,path;
     while(std::getline(input,line))if(line.starts_with("0::"))path=line.substr(3);
     if(path.empty())throw std::runtime_error("Dedicated cgroup v2 required for miner cache guard");
@@ -40,17 +45,22 @@ public:
       }
     });
     std::cout<<"MINER_FILE_CACHE_GUARD=ACTIVE file_trigger_bytes=268435456 swappiness=0 scope=MINER_ONLY\n"<<std::flush;
+#endif
   }
   ~ScopedFileCacheGuard(){thread_.request_stop();if(thread_.joinable())thread_.join();
     std::cout<<"MINER_FILE_CACHE_GUARD=STOP requests="<<requests_.load()<<" errno="<<error_.load()<<'\n'<<std::flush;}
   void check() const {if(const auto error=error_.load())throw std::runtime_error("Miner scoped cache guard failed, errno="+std::to_string(error));}
 private:
   int request(const std::string &value) const {
+#ifdef _WIN32
+    (void)value;return ENOSYS;
+#else
     const int fd=::open((root_/"memory.reclaim").c_str(),O_WRONLY|O_CLOEXEC);
     if(fd<0)return errno;
     const auto written=::write(fd,value.data(),value.size());
     const int error=written<0?errno:written!=static_cast<ssize_t>(value.size())?EIO:0;
     ::close(fd);return error;
+#endif
   }
   std::filesystem::path root_;
   std::atomic_int error_{};

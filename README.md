@@ -4,7 +4,7 @@
 
 Nexus brings Keryx mining, AI service status, wallet authorization, escrow monitoring and GPU telemetry into a single Linux desktop application. The mining engine is primarily C++20 with CUDA support; Rust components handle independent verification and signing-related work, while Python provides local control and presentation services. The desktop is built with Tauri.
 
-> **Project status — 0.0.3 beta / developer source.** Linux x86-64 is the current build baseline. This repository does not distribute a ready-to-run miner, GGUF weights, Merkle trees, private keys or runtime libraries. Windows and macOS are not validated. Some backends and features shown in the interface remain experimental or installation-dependent.
+> **Project status — 0.0.3 beta.** Linux x86-64 remains the development baseline. A **native Windows x64 CUDA CLI preview** is developed and tested on GitHub Actions; GPU execution on Windows is not yet validated. H15 support remains incomplete. Models, Merkle trees, keys and private installation state are external inputs.
 
 ![Nexus desktop overview](docs/screenshots/hero-overview.png)
 
@@ -18,6 +18,27 @@ Nexus brings Keryx mining, AI service status, wallet authorization, escrow monit
 - **AI service integration:** tracks model readiness, assignments, responses and deadlines; AI work takes priority over new mining batches when authorized and available.
 - **Wallet and escrow workflows:** protected wallet configuration, delegation/certificate validation, UTXO and claim visibility, and distinct states for RPC acknowledgment and on-chain confirmation.
 - **Local controls and diagnostics:** desktop actions, a loopback API and an optional authenticated MCP service, with source proposals isolated from the running miner.
+
+## Downloads and Windows
+
+The [Native CLI workflow](https://github.com/tonythewizard/nexus-keryx-miner/actions/workflows/windows.yml)
+builds Windows and Linux executables, the Rust verifier and matching inference
+runtime, runs CPU/API tests and packages ZIP/tar.gz archives with runtime dependencies, licenses and SHA-256 checksums.
+Successful workflow runs provide the preview under **Artifacts**. Tagged downloads
+appear on the [Releases page](https://github.com/tonythewizard/nexus-keryx-miner/releases).
+Only a completed packaging job produces a downloadable binary archive.
+
+| Distribution | Scope |
+| --- | --- |
+| Linux x86-64 | CLI preview built on Ubuntu 24.04; existing desktop available from source |
+| Windows x64 preview | Native CLI, NVIDIA SM 8.6, explicit local profile; no WSL requirement |
+| Windows desktop, Windows AMD/Vulkan, macOS | Not included in the preview |
+
+See **[Native Windows setup and builds](docs/windows.md)** for prerequisites,
+package verification, private configuration and the exact validation limits.
+The preview is experimental and does **not** establish post-H15 compatibility
+or replace SUPR 0.15.0's validated mining support. No GPU benchmark or chain
+acceptance result is implied by compilation and CPU tests.
 
 ## Desktop walkthrough
 
@@ -141,11 +162,11 @@ This configuration performs CPU-only builds and deterministic tests; it does **n
 
 ## Scope and known limitations
 
-- **Linux x86-64** is the development baseline; Windows/macOS support is not established.
-- Current native CUDA kernels target **SM 8.6** and require locally configured GPU identity and compatible runtime dependencies.
+- **Linux x86-64** is the development baseline. Native Windows CLI porting and CI are available as an experimental preview; Windows GPU execution and macOS support are not established.
+- Current native CUDA kernels target **SM 8.6** and require an explicit runtime GPU UUID and compatible runtime dependencies.
 - The **Vulkan backend is experimental**; visibility of AMD or Intel options in controls does not demonstrate tested support for those GPUs. Device admission and proof parity must be established on the actual target hardware.
 - The source baseline does not establish complete H15 verifiable inference support, arbitrary multi-GPU scheduling or a portable installation flow.
-- This public repository does not ship signed releases or an automatic binary-update channel. The legacy updater expects a private repository; leave automatic updates disabled here.
+- Preview packages are unsigned; this repository does not provide an automatic binary-update channel. The legacy updater expects a private repository; leave automatic updates disabled here.
 - Live operation requires external model weights, a compatible inference adapter, Merkle data, independent proof verifier, a synced node, and local wallet/delegation configuration. **Never commit those runtime materials.**
 - Screenshots document one local runtime session, not reproducible performance measurements or universal feature validation.
 

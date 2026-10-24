@@ -1,0 +1,323 @@
+name: Native CLI previews
+on:
+  push:
+    branches: [main, feature/windows-native]
+    tags: ['v*-native-preview*']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: native-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+jobs:
+  source:
+    uses: ./.github/workflows/source-gates.yml
+  cpu:
+    name: Windows x64
+    needs: source
+    runs-on: windows-2022
+    timeout-minutes: 180
+    env:
+      VCPKG_DEFAULT_TRIPLET: x64-windows-static-md
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.local/vcpkg-cache
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Canonical trace patch checkout regression
+        run: python -m unittest discover -s tests/distribution -p test_runtime_patch.py -v
+      - name: Fetch pinned CUDA 13.0.2 license
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force build/cuda-license | Out-Null
+          Invoke-WebRequest -Uri 'https://docs.nvidia.com/cuda/archive/13.0.2/pdf/EULA.pdf' -OutFile build/cuda-license/EULA.pdf
+          $digest = (Get-FileHash build/cuda-license/EULA.pdf -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($digest -ne 'c365e3bfe9ed70d7fb7dbacc4fdd4b4a15fb951be5440f0f6bd95e3c935e93ef') {
+            throw 'Pinned CUDA license checksum mismatch'
+          }
+      - name: Restore compiled dependencies
+        id: depcache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: .local/vcpkg-cache
+          key: windows-vcpkg-${{ hashFiles('tools/windows/vcpkg.json', 'tools/cmake/triplets/*.cmake') }}-v2-${{ github.sha }}
+          restore-keys: |
+            windows-vcpkg-${{ hashFiles('tools/windows/vcpkg.json', 'tools/cmake/triplets/*.cmake') }}-v2-
+            windows-vcpkg-
+      - name: Pinned Windows dependencies
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force .local/vcpkg-cache | Out-Null
+          git clone https://github.com/microsoft/vcpkg.git .local/vcpkg
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          git -C .local/vcpkg checkout 23b8a8e7409c2d6346114a88e834165bde79a51c
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          for ($attempt = 0; $attempt -lt 3; $attempt++) {
+            & .local/vcpkg/bootstrap-vcpkg.bat -disableMetrics
+            if ($LASTEXITCODE -eq 0) { break }
+          }
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Configure MSVC x64
+        shell: pwsh
+        run: |
+          cmake -S . -B build/windows -A x64 `
+            -DCMAKE_TOOLCHAIN_FILE="$pwd/.local/vcpkg/scripts/buildsystems/vcpkg.cmake" `
+            -DVCPKG_MANIFEST_DIR="$pwd/tools/windows" -DVCPKG_OVERLAY_TRIPLETS="$pwd/tools/cmake/triplets" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows-static-md -DVCPKG_HOST_TRIPLET=x64-windows-static-md `
+            -DNEXUS_ENABLE_GRPC=OFF -DNEXUS_ENABLE_CUDA=OFF -DNEXUS_ENABLE_VULKAN_JIT=OFF
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Build native executables
+        run: cmake --build build/windows --config Release --parallel 2
+      - name: Native CPU and Windows API tests
+        run: ctest --test-dir build/windows -C Release --output-on-failure
+
+      - name: Install CUDA compiler (no GPU execution)
+        uses: Jimver/cuda-toolkit@b8bf9c6c28f8a92fbb04dcfcaee872e60c57462d
+        with:
+          cuda: '13.0.2'
+          sub-packages: '["nvcc", "crt", "nvvm", "thrust", "cudart", "nvrtc", "cublas", "cublas_dev", "visual_studio_integration"]'
+          use-github-cache: 'true'
+      - name: Configure native NVIDIA worker
+        shell: pwsh
+        run: |
+          cmake -S . -B build/windows-worker -A x64 `
+            -DCMAKE_TOOLCHAIN_FILE="$pwd/.local/vcpkg/scripts/buildsystems/vcpkg.cmake" `
+            -DVCPKG_MANIFEST_DIR="$pwd/tools/windows" -DVCPKG_OVERLAY_TRIPLETS="$pwd/tools/cmake/triplets" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows-static-md -DVCPKG_HOST_TRIPLET=x64-windows-static-md -DVCPKG_MANIFEST_FEATURES=worker `
+            -DNEXUS_ENABLE_GRPC=ON -DNEXUS_ENABLE_CUDA=ON -DNEXUS_ENABLE_VULKAN_JIT=OFF -DBUILD_TESTING=OFF
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Build Windows worker
+        run: cmake --build build/windows-worker --config Release --target nexus-live-cuda-worker nexus-native-header-parity-test nexus-ai-service-test nexus-ai-journal-archive-test --parallel 2
+      - name: Worker capability smoke check (no GPU)
+        run: build/windows-worker/bin/Release/nexus-live-cuda-worker.exe --inference-capabilities
+      - name: Fetch unmodified pinned oracle dependency
+        run: python tools/fetch_upstream.py
+      - name: Build independent native verifier
+        run: cargo build --release --locked --manifest-path oracle-rust/Cargo.toml --jobs 2
+
+      - name: Independent Windows proof parity and native Rust file tests
+        shell: pwsh
+        env:
+          NEXUS_ORACLE_TEST_DIR: ${{ github.workspace }}/build/windows/test-data/oracle
+        run: |
+          cargo test --release --locked --manifest-path oracle-rust/Cargo.toml --jobs 2
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & oracle-rust/target/release/nexus-m21-oracle.exe generate build/windows/test-data/official-v4.bin
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & build/windows/bin/Release/nexus-consensus-test.exe build/windows/test-data/official-v4.bin build/windows/test-data/cpp-proof.bin
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & oracle-rust/target/release/nexus-m21-oracle.exe verify build/windows/test-data/cpp-proof.bin
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python tests/oracle_negative_suite.py oracle-rust/target/release/nexus-m21-oracle.exe `
+            build/windows/test-data/cpp-proof.bin build/windows/test-data
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Native header hashes and journal recovery
+        shell: pwsh
+        run: |
+          & oracle-rust/target/release/nexus-m21-oracle.exe header build/windows/test-data/official-header.bin
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & build/windows-worker/bin/Release/nexus-native-header-parity-test.exe build/windows/test-data/official-header.bin
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & build/windows-worker/bin/Release/nexus-ai-service-test.exe "$pwd/build/windows/test-data/ai-service"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & build/windows-worker/bin/Release/nexus-ai-journal-archive-test.exe
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Restore matching inference runtime
+        id: runtimecache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: build/runtime-install
+          key: ${{ runner.os }}-inference-cuda13.0.2-${{ hashFiles('tools/runtime/**', 'vendor/keryx-trace-abi6/tools/keryx-llama/**') }}-v1
+      - name: Build matching inference runtime
+        if: steps.runtimecache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          cmake -S tools/runtime -B build/runtime -A x64
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cmake --build build/runtime --config Release --target nexus_inference_runtime --parallel 2
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cmake --install build/runtime --config Release --prefix build/runtime-install --component nexus-runtime
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Save matching inference runtime
+        if: steps.runtimecache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: build/runtime-install
+          key: ${{ steps.runtimecache.outputs.cache-primary-key }}
+      - name: Package reviewed build outputs
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force build/runtime-install/licenses/libb2 | Out-Null
+          Copy-Item build/windows-worker/_deps/nexus_blake2-src/COPYING build/runtime-install/licenses/libb2/COPYING
+          foreach ($dependency in Get-ChildItem build/windows-worker/vcpkg_installed/x64-windows-static-md/share -Directory) {
+            if (Test-Path "$($dependency.FullName)/copyright") {
+              New-Item -ItemType Directory -Force "build/runtime-install/licenses/$($dependency.Name)" | Out-Null
+              Copy-Item "$($dependency.FullName)/copyright" "build/runtime-install/licenses/$($dependency.Name)/copyright"
+            }
+          }
+          $vswhere = "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe"
+          $vsroot = & $vswhere -latest -products '*' -property installationPath
+          $crt = Get-ChildItem "$vsroot/VC/Redist/MSVC/*/x64/Microsoft.VC143.CRT" -Directory | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $crt) { throw 'MSVC redistribution directory unavailable' }
+          $dumpbin = Get-ChildItem "$vsroot/VC/Tools/MSVC/*/bin/Hostx64/x64/dumpbin.exe" | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $dumpbin) { throw 'MSVC dependency inspector unavailable' }
+          python tools/collect_notices.py --output build/runtime-install/licenses `
+            --cargo-home build/windows-worker/cargo-home --cargo-home "$env:USERPROFILE/.cargo"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python tools/package_release.py --platform windows `
+            --worker-dir build/windows-worker/bin/Release `
+            --oracle oracle-rust/target/release/nexus-m21-oracle.exe `
+            --runtime-dir build/runtime-install --cuda-dir "$env:CUDA_PATH/bin/x64" `
+            --cuda-license build/cuda-license/EULA.pdf --crt-dir "$($crt.FullName)" --inspector "$($dumpbin.FullName)"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Upload Windows preview and checksums
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: nexus-windows-x86_64-cuda-sm86-preview
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+      - name: Save compiled dependencies
+        if: always() && steps.depcache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: .local/vcpkg-cache
+          key: windows-vcpkg-${{ hashFiles('tools/windows/vcpkg.json', 'tools/cmake/triplets/*.cmake') }}-v2-${{ github.sha }}
+
+  linux:
+    name: Linux x86-64
+    needs: source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.local/vcpkg-cache
+      CARGO_BUILD_JOBS: '2'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Restore compiled dependencies
+        id: depcache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: .local/vcpkg-cache
+          key: linux-vcpkg-${{ hashFiles('tools/windows/vcpkg.json', 'tools/cmake/triplets/*.cmake') }}-v2-${{ github.sha }}
+          restore-keys: |
+            linux-vcpkg-${{ hashFiles('tools/windows/vcpkg.json', 'tools/cmake/triplets/*.cmake') }}-v2-
+            linux-vcpkg-
+      - name: Native build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y autoconf autoconf-archive automake libtool ninja-build fish
+      - name: Pinned dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .local/vcpkg-cache .local/tmp
+          git clone https://github.com/microsoft/vcpkg.git .local/vcpkg
+          git -C .local/vcpkg checkout 23b8a8e7409c2d6346114a88e834165bde79a51c
+          .local/vcpkg/bootstrap-vcpkg.sh -disableMetrics
+      - name: Install CUDA compiler (no GPU execution)
+        uses: Jimver/cuda-toolkit@b8bf9c6c28f8a92fbb04dcfcaee872e60c57462d
+        with:
+          cuda: '13.0.2'
+          method: network
+          sub-packages: '["nvcc", "cudart", "cudart-dev", "driver-dev", "nvrtc", "nvrtc-dev"]'
+          non-cuda-sub-packages: '["libcublas", "libcublas-dev"]'
+          use-github-cache: 'true'
+      - name: Configure and build Linux worker
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build/linux-worker -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$PWD/.local/vcpkg/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_MANIFEST_DIR="$PWD/tools/windows" -DVCPKG_OVERLAY_TRIPLETS="$PWD/tools/cmake/triplets" -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_FEATURES=worker -DNEXUS_ENABLE_GRPC=ON -DNEXUS_ENABLE_CUDA=ON \
+            -DNEXUS_ENABLE_VULKAN_JIT=OFF -DBUILD_TESTING=OFF
+          cmake --build build/linux-worker --target nexus-live-cuda-worker --parallel 2
+          python3 tools/fetch_upstream.py
+          cargo build --release --locked --manifest-path oracle-rust/Cargo.toml
+      - name: CPU and native file tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build/linux-cpu -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$PWD/.local/vcpkg/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_MANIFEST_DIR="$PWD/tools/windows" -DVCPKG_OVERLAY_TRIPLETS="$PWD/tools/cmake/triplets" -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DNEXUS_RUST_ORACLE="$PWD/oracle-rust/target/release/nexus-m21-oracle"
+          cmake --build build/linux-cpu --parallel 2
+          ctest --test-dir build/linux-cpu --output-on-failure
+          python3 tests/oracle_negative_suite.py oracle-rust/target/release/nexus-m21-oracle \
+            build/linux-cpu/test-data/cpp-proof.bin build/linux-cpu/test-data
+      - name: Restore matching inference runtime
+        id: runtimecache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: build/runtime-install
+          key: ${{ runner.os }}-inference-cuda13.0.2-${{ hashFiles('tools/runtime/**', 'vendor/keryx-trace-abi6/tools/keryx-llama/**') }}-v1
+      - name: Build matching inference runtime
+        if: steps.runtimecache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S tools/runtime -B build/runtime -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/runtime --target nexus_inference_runtime --parallel 2
+          cmake --install build/runtime --prefix "$PWD/build/runtime-install" --component nexus-runtime
+      - name: Save matching inference runtime
+        if: steps.runtimecache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: build/runtime-install
+          key: ${{ steps.runtimecache.outputs.cache-primary-key }}
+      - name: Package reviewed Linux build outputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          for notice in build/linux-worker/vcpkg_installed/x64-linux/share/*/copyright; do
+            name="$(basename "$(dirname "$notice")")"
+            mkdir -p "build/runtime-install/licenses/$name"
+            cp "$notice" "build/runtime-install/licenses/$name/copyright"
+          done
+          python3 tools/collect_notices.py --output build/runtime-install/licenses \
+            --cargo-home build/linux-worker/cargo-home --cargo-home "$HOME/.cargo"
+          python3 tools/package_release.py --platform linux \
+            --worker-dir build/linux-worker/bin --oracle oracle-rust/target/release/nexus-m21-oracle \
+            --runtime-dir build/runtime-install --cuda-dir "$CUDA_PATH/lib64" --inspector /usr/bin/readelf \
+            --cuda-license /usr/share/doc/cuda-cudart-13-0/copyright
+      - name: Upload Linux preview and checksums
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: nexus-linux-x86_64-cuda-sm86-preview
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+      - name: Save compiled dependencies
+        if: always() && steps.depcache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: .local/vcpkg-cache
+          key: linux-vcpkg-${{ hashFiles('tools/windows/vcpkg.json', 'tools/cmake/triplets/*.cmake') }}-v2-${{ github.sha }}
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [source, cpu, linux]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: nexus-*-x86_64-cuda-sm86-preview
+          path: dist
+          merge-multiple: true
+      - name: Publish experimental CLI downloads
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --prerelease \
+            --title "Nexus $GITHUB_REF_NAME — native CLI preview" --notes-file docs/native-preview-notes.md

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(nexus_keryx_miner VERSION 0.0.3 LANGUAGES CXX)
+project(nexus_keryx_miner VERSION 0.0.3 LANGUAGES C CXX)
 set(NEXUS_RECOVERY_ROOT "${CMAKE_BINARY_DIR}/runtime" CACHE PATH "Private persistent runtime/test data")
 set(NEXUS_PRIMARY_GPU_UUID "GPU-00000000-0000-0000-0000-000000000000" CACHE STRING "Explicit NVIDIA UUID; configure locally for GPU execution")
 set(NEXUS_SECONDARY_GPU_ID "pci:0000:00:00.0" CACHE STRING "Explicit secondary PCI identity")
@@ -23,6 +23,9 @@ option(NEXUS_ENABLE_GRPC "Build native gRPC ingress, AI and escrow components" O
 option(NEXUS_ENABLE_CUDA "Build the independent CUDA PoM backend" OFF)
 option(NEXUS_ENABLE_VULKAN_JIT "Build experimental AMD Vulkan JIT support tools (no production admission)" OFF)
 set(NEXUS_VULKAN_HEADERS "" CACHE PATH "Isolated official Vulkan-Headers include directory")
+if(WIN32 AND NEXUS_ENABLE_VULKAN_JIT)
+  message(FATAL_ERROR "The Windows CLI preview supports CUDA only; Vulkan process adapters require Linux")
+endif()
 set(NEXUS_RUST_ORACLE "" CACHE FILEPATH "Built official Rust oracle executable")
 set(NEXUS_LIVE_CAPTURE_DIR "" CACHE PATH "Persistent directory with verified captured templates")
 set(CMAKE_CXX_STANDARD 20)
@@ -41,10 +44,24 @@ function(nexus_optimize_pom_host target)
   endif()
 endfunction()
 
-find_path(BLAKE3_INCLUDE_DIR blake3.h REQUIRED)
-find_library(BLAKE3_LIBRARY NAMES blake3 REQUIRED)
-find_path(BLAKE2_INCLUDE_DIR blake2.h REQUIRED)
-find_library(BLAKE2_LIBRARY NAMES b2 REQUIRED)
+if(WIN32)
+  add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0A00)
+  find_package(blake3 CONFIG REQUIRED)
+  set(BLAKE3_LIBRARY BLAKE3::blake3)
+  include("${CMAKE_CURRENT_SOURCE_DIR}/tools/cmake/blake2-reference.cmake")
+else()
+  find_path(BLAKE3_INCLUDE_DIR blake3.h REQUIRED)
+  find_library(BLAKE3_LIBRARY NAMES blake3 REQUIRED)
+  find_path(BLAKE2_INCLUDE_DIR blake2.h REQUIRED)
+  find_library(BLAKE2_LIBRARY NAMES b2 REQUIRED)
+endif()
+function(nexus_warnings target)
+  if(MSVC)
+    target_compile_options(${target} PRIVATE /W4 /permissive- /utf-8)
+  else()
+    target_compile_options(${target} PRIVATE ${ARGN})
+  endif()
+endfunction()
 find_package(Threads REQUIRED)
 find_package(OpenSSL REQUIRED COMPONENTS Crypto)
 find_package(Python3 COMPONENTS Interpreter QUIET)
@@ -55,24 +72,24 @@ if(NEXUS_ENABLE_VULKAN_JIT)
   add_executable(nexus-vulkan-device-info src/gpu/vulkan_device_info.cpp)
   target_include_directories(nexus-vulkan-device-info PRIVATE "${NEXUS_VULKAN_INCLUDE}")
   target_link_libraries(nexus-vulkan-device-info PRIVATE "${NEXUS_VULKAN_LOADER}")
-  target_compile_options(nexus-vulkan-device-info PRIVATE -Wall -Wextra -Wno-missing-field-initializers)
+  nexus_warnings(nexus-vulkan-device-info -Wall -Wextra -Wno-missing-field-initializers)
   add_executable(nexus-vulkan-offline-probe experiments/vulkan_jit/scatter_probe.cpp)
   target_include_directories(nexus-vulkan-offline-probe PRIVATE "${NEXUS_VULKAN_INCLUDE}")
   target_link_libraries(nexus-vulkan-offline-probe PRIVATE "${NEXUS_VULKAN_LOADER}" nexus_gpu_work)
-  target_compile_options(nexus-vulkan-offline-probe PRIVATE -Wall -Wextra -Wno-missing-field-initializers)
+  nexus_warnings(nexus-vulkan-offline-probe -Wall -Wextra -Wno-missing-field-initializers)
   add_executable(nexus-vulkan-proof-probe experiments/vulkan_jit/proof_probe.cpp)
   target_link_libraries(nexus-vulkan-proof-probe PRIVATE nexus_consensus)
-  target_compile_options(nexus-vulkan-proof-probe PRIVATE -Wall -Wextra)
+  nexus_warnings(nexus-vulkan-proof-probe -Wall -Wextra)
   add_executable(nexus-vulkan-real-model-probe experiments/vulkan_jit/real_model_probe.cpp)
   target_link_libraries(nexus-vulkan-real-model-probe PRIVATE nexus_model)
-  target_compile_options(nexus-vulkan-real-model-probe PRIVATE -Wall -Wextra)
+  nexus_warnings(nexus-vulkan-real-model-probe -Wall -Wextra)
   add_library(nexus_gpu_work src/gpu/gpu_work_coordinator.cpp src/gpu/secondary_work_lane.cpp)
   target_link_libraries(nexus_gpu_work PUBLIC nexus_consensus)
-  target_compile_options(nexus_gpu_work PRIVATE -Wall -Wextra -Wpedantic)
+  nexus_warnings(nexus_gpu_work -Wall -Wextra -Wpedantic)
   add_library(nexus_vulkan_walk src/gpu/vulkan_walk_engine.cpp src/gpu/vulkan_bda_resident_engine.cpp)
   target_include_directories(nexus_vulkan_walk PRIVATE "${NEXUS_VULKAN_INCLUDE}")
   target_link_libraries(nexus_vulkan_walk PUBLIC nexus_consensus PRIVATE "${NEXUS_VULKAN_LOADER}" OpenSSL::Crypto)
-  target_compile_options(nexus_vulkan_walk PRIVATE -Wall -Wextra -Wno-missing-field-initializers)
+  nexus_warnings(nexus_vulkan_walk -Wall -Wextra -Wno-missing-field-initializers)
   # Explicit GPU validation executable; never run implicitly on a mining device.
   add_executable(nexus-vulkan-bda-validation-test tests/vulkan_bda_validation_test.cpp)
   target_link_libraries(nexus-vulkan-bda-validation-test PRIVATE nexus_vulkan_walk)
@@ -91,9 +108,6 @@ if(NEXUS_ENABLE_CUDA)
     message(FATAL_ERROR "NEXUS_ENABLE_CUDA currently requires NEXUS_ENABLE_GRPC for captured-job binding")
   endif()
   enable_language(CUDA)
-  if(NEXUS_PRIMARY_GPU_UUID STREQUAL "GPU-00000000-0000-0000-0000-000000000000")
-    message(FATAL_ERROR "Configure NEXUS_PRIMARY_GPU_UUID explicitly for a CUDA build")
-  endif()
   find_package(CUDAToolkit 13 REQUIRED)
   set(CMAKE_CUDA_STANDARD 20)
   set(CMAKE_CUDA_STANDARD_REQUIRED ON)
@@ -104,50 +118,41 @@ add_library(nexus_consensus consensus/pom_v4.cpp)
 nexus_optimize_pom_host(nexus_consensus)
 target_include_directories(nexus_consensus PUBLIC include ${BLAKE3_INCLUDE_DIR} PRIVATE ${BLAKE2_INCLUDE_DIR})
 target_link_libraries(nexus_consensus PUBLIC ${BLAKE3_LIBRARY} PRIVATE ${BLAKE2_LIBRARY})
-target_compile_options(nexus_consensus PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+nexus_warnings(nexus_consensus -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 
 add_library(nexus_capture src/network/capture.cpp src/network/pipeline.cpp
   src/network/live_job_queue.cpp)
 target_include_directories(nexus_capture PUBLIC include ${BLAKE3_INCLUDE_DIR})
 target_link_libraries(nexus_capture PUBLIC ${BLAKE3_LIBRARY} Threads::Threads)
-target_compile_options(nexus_capture PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+nexus_warnings(nexus_capture -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 target_link_libraries(nexus_consensus PUBLIC nexus_capture)
 
 if(NEXUS_ENABLE_CUDA)
-  find_program(NEXUS_OBJCOPY_EXECUTABLE NAMES objcopy REQUIRED)
-  # The PoM host path uses the Driver API. Compile the unchanged device kernels
-  # to an SM 8.6 cubin, embed it in the library, and launch via cuModule/cuLaunch
-  # so the worker does not acquire a CUDA Runtime SONAME of its own.
-  set(NEXUS_POM_CUBIN "${CMAKE_CURRENT_BINARY_DIR}/nexus_pom.cubin")
-  set(NEXUS_POM_IMAGE_OBJECT "${CMAKE_CURRENT_BINARY_DIR}/nexus_pom_image.o")
+  # Compile unchanged device kernels, then embed a portable C++ byte array.
+  # The resulting host library has no CUDA Runtime dependency of its own.
   set(NEXUS_CUDA_TEMP "${CMAKE_CURRENT_BINARY_DIR}/persistent-tmp")
   file(MAKE_DIRECTORY "${NEXUS_CUDA_TEMP}")
-  add_custom_command(OUTPUT "${NEXUS_POM_IMAGE_OBJECT}"
-    COMMAND ${CMAKE_COMMAND} -E env
-      "TMPDIR=${NEXUS_CUDA_TEMP}" "TMP=${NEXUS_CUDA_TEMP}" "TEMP=${NEXUS_CUDA_TEMP}"
-      ${CMAKE_CUDA_COMPILER} --cubin --cudart=none -arch=sm_86
-      "${CMAKE_CURRENT_SOURCE_DIR}/consensus/cuda_walk_kernels.cu"
-      -o "${NEXUS_POM_CUBIN}"
-    COMMAND ${CMAKE_COMMAND} -E chdir "${CMAKE_CURRENT_BINARY_DIR}"
-      ${NEXUS_OBJCOPY_EXECUTABLE} --input-target=binary --output-target=elf64-x86-64
-      --binary-architecture=i386:x86-64 nexus_pom.cubin nexus_pom_image.o
-    DEPENDS consensus/cuda_walk_kernels.cu
-    VERBATIM)
-  set_source_files_properties("${NEXUS_POM_IMAGE_OBJECT}" PROPERTIES
-    GENERATED TRUE EXTERNAL_OBJECT TRUE)
-  set(NEXUS_RESIDENT_IMAGE "${CMAKE_CURRENT_BINARY_DIR}/nexus_resident_image.o")
-  add_custom_command(OUTPUT "${NEXUS_RESIDENT_IMAGE}"
-    COMMAND ${CMAKE_COMMAND} -E env "TMPDIR=${NEXUS_CUDA_TEMP}" "TMP=${NEXUS_CUDA_TEMP}" "TEMP=${NEXUS_CUDA_TEMP}"
-      ${CMAKE_CUDA_COMPILER} --cubin --cudart=none -arch=sm_86
-      "${CMAKE_CURRENT_SOURCE_DIR}/consensus/cuda_resident_kernels.cu" -o "${CMAKE_CURRENT_BINARY_DIR}/nexus_resident.cubin"
-    COMMAND ${CMAKE_COMMAND} -E chdir "${CMAKE_CURRENT_BINARY_DIR}"
-      ${NEXUS_OBJCOPY_EXECUTABLE} --input-target=binary --output-target=elf64-x86-64
-      --binary-architecture=i386:x86-64 nexus_resident.cubin nexus_resident_image.o
-    DEPENDS consensus/cuda_resident_kernels.cu consensus/resident_keccak.cuh VERBATIM)
-  set_source_files_properties("${NEXUS_RESIDENT_IMAGE}" PROPERTIES GENERATED TRUE EXTERNAL_OBJECT TRUE)
-  add_library(nexus_cuda consensus/cuda_walk.cpp consensus/cuda_resident.cpp "${NEXUS_POM_IMAGE_OBJECT}" "${NEXUS_RESIDENT_IMAGE}")
-  add_custom_target(nexus_pom_image DEPENDS "${NEXUS_POM_IMAGE_OBJECT}")
-  add_dependencies(nexus_cuda nexus_pom_image)
+  set(NEXUS_CUDA_IMAGES)
+  foreach(image pom resident)
+    if(image STREQUAL "pom")
+      set(kernel cuda_walk_kernels.cu)
+    else()
+      set(kernel cuda_resident_kernels.cu)
+    endif()
+    set(cubin "${CMAKE_CURRENT_BINARY_DIR}/nexus_${image}.cubin")
+    set(embedded "${CMAKE_CURRENT_BINARY_DIR}/nexus_${image}_image.cpp")
+    add_custom_command(OUTPUT "${embedded}"
+      COMMAND ${CMAKE_COMMAND} -E env
+        "TMPDIR=${NEXUS_CUDA_TEMP}" "TMP=${NEXUS_CUDA_TEMP}" "TEMP=${NEXUS_CUDA_TEMP}"
+        ${CMAKE_CUDA_COMPILER} --cubin --cudart=none -arch=sm_86
+        "${CMAKE_CURRENT_SOURCE_DIR}/consensus/${kernel}" -o "${cubin}"
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/embed_cubin.py"
+        "${cubin}" "${embedded}" "_binary_nexus_${image}_cubin_start"
+      DEPENDS "consensus/${kernel}" consensus/resident_keccak.cuh tools/embed_cubin.py
+      VERBATIM)
+    list(APPEND NEXUS_CUDA_IMAGES "${embedded}")
+  endforeach()
+  add_library(nexus_cuda consensus/cuda_walk.cpp consensus/cuda_resident.cpp ${NEXUS_CUDA_IMAGES})
   target_include_directories(nexus_cuda PUBLIC include)
   target_link_libraries(nexus_cuda PUBLIC CUDA::cuda_driver nexus_model)
 endif()
@@ -156,20 +161,51 @@ add_library(nexus_model src/model/gguf_reader.cpp)
 nexus_optimize_pom_host(nexus_model)
 target_include_directories(nexus_model PUBLIC include ${BLAKE3_INCLUDE_DIR})
 target_link_libraries(nexus_model PUBLIC nexus_consensus OpenSSL::Crypto)
-target_compile_options(nexus_model PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+nexus_warnings(nexus_model -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 add_executable(nexus-pom-host-replay tests/pom_host_replay.cpp)
 target_link_libraries(nexus-pom-host-replay PRIVATE nexus_model)
 add_executable(nexus-gguf-inspect src/model/gguf_main.cpp)
 target_link_libraries(nexus-gguf-inspect PRIVATE nexus_model)
 
+if(WIN32 AND NOT NEXUS_ENABLE_GRPC)
+  include("${CMAKE_CURRENT_SOURCE_DIR}/tools/cmake/windows-tests.cmake")
+  return()
+endif()
+
 if(NEXUS_ENABLE_GRPC)
   find_package(Protobuf CONFIG REQUIRED)
+  if(MSVC)
+    # Catch mixed C++17/C++20 Protobuf packages before compiling the worker.
+    include(CMakePushCheckState)
+    include(CheckCXXSourceCompiles)
+    cmake_push_check_state(RESET)
+    set(nexus_previous_try_configuration "${CMAKE_TRY_COMPILE_CONFIGURATION}")
+    set(CMAKE_TRY_COMPILE_CONFIGURATION Release)
+    set(CMAKE_REQUIRED_LIBRARIES protobuf::libprotobuf)
+    unset(NEXUS_PROTOBUF_CXX20_LINKS CACHE)
+    check_cxx_source_compiles("
+#include <google/protobuf/message_lite.h>
+int main() {
+  const void* volatile empty = &google::protobuf::internal::fixed_address_empty_string;
+  return empty == nullptr;
+}
+" NEXUS_PROTOBUF_CXX20_LINKS)
+    set(CMAKE_TRY_COMPILE_CONFIGURATION "${nexus_previous_try_configuration}")
+    cmake_pop_check_state()
+    if(NOT NEXUS_PROTOBUF_CXX20_LINKS)
+      message(FATAL_ERROR "Protobuf ABI does not match MSVC C++20. Rebuild dependencies using tools/cmake/triplets/x64-windows-static-md.cmake.")
+    endif()
+  endif()
   find_package(gRPC CONFIG REQUIRED)
   find_package(CURL REQUIRED)
   find_package(ZLIB REQUIRED)
   find_program(CARGO_EXECUTABLE cargo REQUIRED)
   set(NEXUS_AI_BRIDGE_TARGET_DIR "${CMAKE_CURRENT_BINARY_DIR}/ai-bridge-target")
-  set(NEXUS_AI_BRIDGE_LIBRARY "${NEXUS_AI_BRIDGE_TARGET_DIR}/release/libnexus_ai_response_bridge.a")
+  if(WIN32)
+    set(NEXUS_AI_BRIDGE_LIBRARY "${NEXUS_AI_BRIDGE_TARGET_DIR}/release/nexus_ai_response_bridge.lib")
+  else()
+    set(NEXUS_AI_BRIDGE_LIBRARY "${NEXUS_AI_BRIDGE_TARGET_DIR}/release/libnexus_ai_response_bridge.a")
+  endif()
   set(NEXUS_AI_BRIDGE_CARGO_HOME "$ENV{CARGO_HOME}" CACHE PATH "Cargo cache")
   if(NOT NEXUS_AI_BRIDGE_CARGO_HOME)
     set(NEXUS_AI_BRIDGE_CARGO_HOME "${CMAKE_BINARY_DIR}/cargo-home")
@@ -185,13 +221,14 @@ if(NEXUS_ENABLE_GRPC)
       "CARGO_HOME=${NEXUS_AI_BRIDGE_CARGO_HOME}"
       "CARGO_TARGET_DIR=${NEXUS_AI_BRIDGE_TARGET_DIR}"
       "CARGO_BUILD_JOBS=1"
+      "PROTOC=$<TARGET_FILE:protobuf::protoc>"
       "TMPDIR=${NEXUS_PERSISTENT_TMP}" "TMP=${NEXUS_PERSISTENT_TMP}" "TEMP=${NEXUS_PERSISTENT_TMP}"
       ${CARGO_EXECUTABLE} build --release --locked --manifest-path "${CMAKE_CURRENT_SOURCE_DIR}/ai-response-bridge/Cargo.toml"
     DEPENDS ai-response-bridge/Cargo.toml ai-response-bridge/Cargo.lock
       ai-response-bridge/src/verified_inference.rs ai-response-bridge/src/trace_producer.rs
       ai-response-bridge/src/trace_store.rs ai-response-bridge/src/trace_recovery.rs
       vendor/keryx-verifiable-inference/Cargo.toml ${NEXUS_VERIFIED_INFERENCE_SOURCES} ${NEXUS_TRACE_MANIFESTS}
-      ai-response-bridge/build.rs ai-response-bridge/src/lib.rs
+      ai-response-bridge/build.rs ai-response-bridge/src/lib.rs ai-response-bridge/src/bin/fixture.rs
       vendor/keryx-miner-v057/src/escrow.rs vendor/keryx-miner-v057/proto/rpc.proto
       vendor/keryx-inference-v057/inference/Cargo.toml
       vendor/keryx-inference-v057/inference/src/ai_payload.rs
@@ -230,8 +267,13 @@ if(NEXUS_ENABLE_GRPC)
   target_include_directories(nexus_grpc PUBLIC include PRIVATE "${PROTO_GEN}")
   target_link_libraries(nexus_grpc PUBLIC nexus_capture nexus_node_proto nexus_consensus gRPC::grpc++
     OpenSSL::Crypto ${BLAKE2_LIBRARY} ${CMAKE_DL_LIBS} CURL::libcurl ZLIB::ZLIB
-    nexus_ai_response_bridge Threads::Threads ${CMAKE_DL_LIBS} m rt util)
-  target_compile_options(nexus_grpc PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+    nexus_ai_response_bridge Threads::Threads ${CMAKE_DL_LIBS})
+  if(WIN32)
+    target_link_libraries(nexus_grpc PUBLIC ws2_32 userenv bcrypt ntdll advapi32 secur32 crypt32)
+  else()
+    target_link_libraries(nexus_grpc PUBLIC m rt util)
+  endif()
+  nexus_warnings(nexus_grpc -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
   if(NEXUS_ENABLE_VULKAN_JIT)
     add_library(nexus_amd_candidate src/gpu/amd_candidate_pipeline.cpp)
     target_include_directories(nexus_amd_candidate PRIVATE "${PROTO_GEN}")
@@ -242,6 +284,11 @@ if(NEXUS_ENABLE_GRPC)
     add_executable(nexus-nvidia-vulkan-workflow-test tests/nvidia_vulkan_workflow_test.cpp)
     target_include_directories(nexus-nvidia-vulkan-workflow-test PRIVATE "${PROTO_GEN}")
     target_link_libraries(nexus-nvidia-vulkan-workflow-test PRIVATE nexus_amd_candidate)
+  endif()
+  if(WIN32)
+    add_executable(nexus-native-header-parity-test tests/header_parity_test.cpp)
+    target_link_libraries(nexus-native-header-parity-test PRIVATE nexus_grpc)
+    target_compile_options(nexus-native-header-parity-test PRIVATE /UNDEBUG)
   endif()
   add_executable(keryx-nexus-live src/network/live_main.cpp)
   target_link_libraries(keryx-nexus-live PRIVATE nexus_grpc)
@@ -268,6 +315,11 @@ if(NEXUS_ENABLE_GRPC)
       NEXUS_RECOVERY_ROOT="${NEXUS_RECOVERY_ROOT}")
     target_include_directories(nexus-live-cuda-worker PRIVATE "${PROTO_GEN}")
     target_link_libraries(nexus-live-cuda-worker PRIVATE nexus_cuda nexus_grpc nexus_model)
+    if(MSVC)
+      target_sources(nexus-live-cuda-worker PRIVATE tools/windows/app.manifest)
+      target_link_libraries(nexus-live-cuda-worker PRIVATE delayimp)
+      target_link_options(nexus-live-cuda-worker PRIVATE /DELAYLOAD:nvcuda.dll)
+    endif()
     add_executable(nexus-opoi-preemption-cuda-test tests/opoi_preemption_cuda_test.cpp)
     target_include_directories(nexus-opoi-preemption-cuda-test PRIVATE "${PROTO_GEN}")
     target_link_libraries(nexus-opoi-preemption-cuda-test PRIVATE nexus_cuda nexus_grpc nexus_model)
@@ -757,4 +809,10 @@ if(BUILD_TESTING AND NOT NEXUS_ENABLE_GRPC)
     target_link_libraries(nexus-${case}-cpu-test PRIVATE Threads::Threads)
     add_test(NAME ${case}_cpu_policy COMMAND nexus-${case}-cpu-test)
   endforeach()
+endif()
+
+if(BUILD_TESTING)
+  add_executable(nexus-platform-file-test tests/platform_file_test.cpp)
+  target_link_libraries(nexus-platform-file-test PRIVATE nexus_model)
+  add_test(NAME native_file_reads COMMAND nexus-platform-file-test "${CMAKE_BINARY_DIR}/test-data/platform-file")
 endif()

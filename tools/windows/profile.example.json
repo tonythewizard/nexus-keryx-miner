@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "data_dir": "",
+  "gpu_uuid": "GPU-00000000-0000-0000-0000-000000000000",
+  "endpoint": "grpc://127.0.0.1:16110",
+  "payout": "",
+  "delegation": "",
+  "model": "",
+  "tree": "",
+  "metadata": "",
+  "escrow_key": "",
+  "output": ""
+}

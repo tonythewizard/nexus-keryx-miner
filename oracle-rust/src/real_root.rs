@@ -156,7 +156,7 @@ pub fn verify(model_path: &Path, index_path: &Path) {
         "Rust root preflight blocked: MemAvailable={avail} KiB SwapFree={swap_free} KiB PSI={psi}"
     );
     let node = proc_start(
-        &std::env::var("NEXUS_NODE_EXECUTABLE").map_err(|_| "NEXUS_NODE_EXECUTABLE required")?,
+        &std::env::var("NEXUS_NODE_EXECUTABLE").expect("NEXUS_NODE_EXECUTABLE required"),
         false,
     );
     let ipfs = proc_start("/usr/bin/ipfs", true);
@@ -209,7 +209,7 @@ pub fn verify(model_path: &Path, index_path: &Path) {
                 assert!(
                     same(
                         &node,
-                        &std::env::var("NEXUS_NODE_EXECUTABLE").map_err(|_| "NEXUS_NODE_EXECUTABLE required")?
+                        &std::env::var("NEXUS_NODE_EXECUTABLE").expect("NEXUS_NODE_EXECUTABLE required")
                     ),
                     "keryxd identity changed"
                 );
@@ -241,7 +241,7 @@ pub fn verify(model_path: &Path, index_path: &Path) {
     assert_eq!(h, expected, "independent Rust GGUF root mismatch");
     assert!(same(
         &node,
-        &std::env::var("NEXUS_NODE_EXECUTABLE").map_err(|_| "NEXUS_NODE_EXECUTABLE required")?
+        &std::env::var("NEXUS_NODE_EXECUTABLE").expect("NEXUS_NODE_EXECUTABLE required")
     ));
     assert!(same(&ipfs, "/usr/bin/ipfs"));
     println!("OFFICIAL_RUST_GGUF_ROOT=PASS chunks={processed} tensors={n} root=H6-tier0 elapsed_ms={} streaming_buffer_bytes={}",started.elapsed().as_millis(),slab.len());

@@ -10,3 +10,6 @@ keryx-math = { path = "../_deps/keryx-node/math" }
 blake3 = "1"
 libc = "0.2"
 borsh = { version = "1.5.1", features = ["derive"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Threading"] }

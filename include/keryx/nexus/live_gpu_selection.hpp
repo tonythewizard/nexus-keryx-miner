@@ -1,13 +1,11 @@
+#include "keryx/nexus/platform/io.hpp"
 #pragma once
 #include <atomic>
 #include <cerrno>
 #include <cstdint>
 #include <initializer_list>
-#include <fcntl.h>
 #include <string>
 #include <stdexcept>
-#include <sys/stat.h>
-#include <unistd.h>
 #include <google/protobuf/struct.pb.h>
 #include <google/protobuf/util/json_util.h>
 
@@ -35,17 +33,17 @@ public:
     bool primary=false, secondary=false;
     error_.clear();
     try {
-      struct File { int fd; ~File() { if(fd>=0) ::close(fd); } } file{
-          ::open(file_.c_str(), O_RDONLY|O_CLOEXEC|O_NOFOLLOW|O_NONBLOCK)};
+      struct File { int fd; ~File() { if(fd>=0) keryx::nexus::platform::io::close(fd); } } file{
+          keryx::nexus::platform::io::open(file_.c_str(), O_RDONLY|O_CLOEXEC|O_NOFOLLOW|O_NONBLOCK)};
       if(file.fd<0) throw std::runtime_error("PRIVATE_SELECTION_UNAVAILABLE");
-      struct stat st{};
-      if(::fstat(file.fd,&st)!=0 || !S_ISREG(st.st_mode) || st.st_uid!=::getuid() ||
+      keryx::nexus::platform::io::Stat st{};
+      if(keryx::nexus::platform::io::fstat(file.fd,&st)!=0 || !S_ISREG(st.st_mode) || st.st_uid!=keryx::nexus::platform::io::getuid() ||
           (st.st_mode&077) || st.st_size<1 || st.st_size>4096)
         throw std::runtime_error("INVALID_PRIVATE_SELECTION");
       std::string data;
       char buffer[4097];
       for(;;) {
-        const auto n=::read(file.fd,buffer,sizeof(buffer));
+        const auto n=keryx::nexus::platform::io::read(file.fd,buffer,sizeof(buffer));
         if(n<0 && errno==EINTR) continue;
         if(n<0) throw std::runtime_error("SELECTION_READ_FAILED");
         if(!n) break;

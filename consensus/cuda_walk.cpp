@@ -19,7 +19,7 @@ namespace {
 constexpr std::size_t tile_bytes_cuda = 1024;
 constexpr std::size_t steps_cuda = 256;
 constexpr std::size_t tile_cache_max_bytes = 32ULL * 1024 * 1024;
-constexpr std::string_view authorized_uuid = "" NEXUS_PRIMARY_GPU_UUID "";
+
 extern "C" const unsigned char _binary_nexus_pom_cubin_start[];
 
 void check(CUresult status, const char *what) {
@@ -178,8 +178,8 @@ struct CudaWalkEngine::Impl {
   Impl(const std::string &required_uuid, std::size_t max_batch, bool proof_only)
       : max_nonces(max_batch) {
     const char *visible = std::getenv("CUDA_VISIBLE_DEVICES");
-    if (required_uuid != authorized_uuid || visible == nullptr ||
-        std::string_view(visible) != authorized_uuid)
+    if (required_uuid != primary_gpu_uuid() || visible == nullptr ||
+        std::string_view(visible) != primary_gpu_uuid())
       throw std::runtime_error(
           "CUDA fail-closed: CUDA_VISIBLE_DEVICES and requested UUID must identify only the authorized primary NVIDIA GPU");
     if (max_nonces == 0 || max_nonces > 8)

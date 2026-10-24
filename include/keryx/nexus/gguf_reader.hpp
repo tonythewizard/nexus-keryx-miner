@@ -1,4 +1,6 @@
 #pragma once
+#include "keryx/nexus/platform/read_only_file.hpp"
+#include <memory>
 #include "keryx/nexus/consensus/pom_v4.hpp"
 #include <cstdint>
 #include <filesystem>
@@ -60,7 +62,7 @@ private:
   void read_tiles_impl(std::uint64_t tile,std::span<std::uint8_t> out,bool streaming) const;
   struct TileSpan { std::uint64_t first_chunk{}; std::uint64_t chunk_count{}; std::uint64_t file_offset{}; };
   std::filesystem::path path_;
-  int file_fd_{-1};
+  std::unique_ptr<platform::ReadOnlyFile> file_;
   const std::uint8_t *mmap_base_{nullptr};
   std::uint64_t file_size_{};
   std::uint64_t tensor_data_offset_{};
@@ -93,7 +95,7 @@ private:
   struct Checkpoint { std::uint32_t level; std::uint64_t offset; std::uint64_t count; };
   const ReadOnlyGguf &gguf_;
   std::filesystem::path tree_;
-  int tree_fd_{-1};
+  std::unique_ptr<platform::ReadOnlyFile> tree_file_;
   std::uint32_t total_levels_{};
   std::vector<Checkpoint> checkpoints_;
   std::vector<std::vector<consensus::Hash>> upper_levels_;
