@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import time
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -95,10 +96,16 @@ def main():
         (package / 'SHA256SUMS').write_text('\n'.join(sums) + '\n')
         if windows:
             archive = args.output / (name + '.zip')
-            with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as output:
+            # Crate notices can retain reproducible timestamps from 1973.
+            # Clamp ZIP metadata to its date range without changing file bytes.
+            with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED, strict_timestamps=False) as output:
                 for file in sorted(package.rglob('*')):
                     if file.is_file():
-                        output.write(file, file.relative_to(package.parent).as_posix())
+                        relative = file.relative_to(package.parent).as_posix()
+                        timestamp = time.localtime(file.stat().st_mtime)
+                        if not 1980 <= timestamp.tm_year <= 2107:
+                            print(f'ZIP timestamp clamped: {relative} ({time.strftime("%Y-%m-%d %H:%M:%S", timestamp)})')
+                        output.write(file, relative)
         else:
             archive = args.output / (name + '.tar.gz')
             with tarfile.open(archive, 'w:gz') as output:

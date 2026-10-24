@@ -115,6 +115,28 @@ class Release(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(list((self.root / 'out').glob('*.zip')))
 
+    def test_pre_1980_dependency_notice_keeps_contents_and_checksums(self):
+        args = self.package_inputs()
+        # Real timestamp in the locked chacha20poly1305 0.10.1 crate archive.
+        relative = 'licenses/rust/chacha20poly1305-0.10.1/LICENSE-APACHE'
+        notice = self.root / 'engine' / relative
+        notice.parent.mkdir(parents=True)
+        contents = b'synthetic dependency notice\n'
+        notice.write_bytes(contents)
+        os.utime(notice, (123456789, 123456789))
+        result = subprocess.run(args, check=True, capture_output=True, text=True)
+        self.assertIn(relative, result.stdout)
+        archive = next((self.root / 'out').glob('*.zip'))
+        with zipfile.ZipFile(archive) as packed:
+            name = next(name for name in packed.namelist() if name.endswith('/' + relative))
+            self.assertEqual(packed.getinfo(name).date_time, (1980, 1, 1, 0, 0, 0))
+            self.assertEqual(packed.read(name), contents)
+            sums = packed.read(next(name for name in packed.namelist()
+                                    if name.endswith('/SHA256SUMS'))).decode()
+            self.assertIn(hashlib.sha256(contents).hexdigest() + '  ' + relative, sums)
+        self.assertEqual(archive.with_name(archive.name + '.sha256').read_text().split()[0],
+                         hashlib.sha256(archive.read_bytes()).hexdigest())
+
     def test_launcher_requires_profile_and_explicit_live_authorization(self):
         ext = '.exe' if os.name == 'nt' else ''
         for name in ('nexus-live-cuda-worker' + ext, 'nexus-m21-oracle' + ext,
