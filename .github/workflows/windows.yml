@@ -246,6 +246,9 @@ jobs:
           export TMPDIR="$PWD/.local/tmp"
           export NEXUS_ESCROW_TEST_DIR="$PWD/build/escrow-tests"
           export CARGO_TARGET_DIR="$PWD/build/linux-worker/ai-bridge-target"
+          export CARGO_HOME="$PWD/build/linux-worker/cargo-home"
+          export PROTOC="$PWD/build/linux-worker/vcpkg_installed/x64-linux/tools/protobuf/protoc"
+          test -x "$PROTOC"
           cargo test --release --locked --manifest-path ai-response-bridge/Cargo.toml --jobs 2
       - name: CPU and native file tests
         shell: bash

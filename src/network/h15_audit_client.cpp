@@ -139,7 +139,9 @@ struct H15AuditClient::Impl {
             : std::chrono::steady_clock::duration(std::chrono::seconds(8));
     need(remaining > std::chrono::steady_clock::duration::zero(),
          "Audit polling budget exhausted");
-    const auto deadline = std::chrono::system_clock::now() + remaining;
+    // MSVC's system clock uses 100 ns ticks; gRPC accepts its exact time_point.
+    const auto deadline = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+        std::chrono::system_clock::now() + remaining);
     need(channel->WaitForConnected(deadline), "Audit RPC connection timeout");
     grpc::ClientContext ctx;
     ctx.set_deadline(deadline);
