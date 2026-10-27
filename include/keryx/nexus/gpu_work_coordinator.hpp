@@ -17,16 +17,22 @@ inline bool startup_attestation_gate(WorkGate gate) {
 
 // A notification is not yet a stale verdict. Yield briefly for its validated
 // template, without admitting work on Pending or delaying AI cancellation.
-template<class Check,class Cancelled>
-bool bounded_work_ready(Check check,Cancelled cancelled) {
-  const auto deadline=std::chrono::steady_clock::now()+std::chrono::milliseconds(5);
+template<class Check,class Cancelled,class Now,class Wait>
+bool bounded_work_ready(Check check,Cancelled cancelled,Now now,Wait wait) {
+  const auto deadline=now()+std::chrono::milliseconds(5);
   for(;;) {
     if(cancelled())return false;
     const auto state=check();
     if(state!=WorkGate::RefreshPending)return state==WorkGate::Ready;
-    if(std::chrono::steady_clock::now()>=deadline)return false;
-    std::this_thread::sleep_for(std::chrono::microseconds(100));
+    if(now()>=deadline)return false;
+    wait();
   }
+}
+template<class Check,class Cancelled>
+bool bounded_work_ready(Check check,Cancelled cancelled) {
+  return bounded_work_ready(check,cancelled,
+      []{return std::chrono::steady_clock::now();},
+      []{std::this_thread::sleep_for(std::chrono::microseconds(100));});
 }
 
 // Development coordinator: both GPU lanes must use ONE instance in a future
