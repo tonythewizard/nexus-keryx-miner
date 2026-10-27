@@ -21,6 +21,8 @@ def main():
     parser.add_argument('--worker-dir', required=True, type=Path)
     parser.add_argument('--oracle', required=True, type=Path)
     parser.add_argument('--runtime-dir', required=True, type=Path)
+    parser.add_argument('--runtime-abi', type=int, choices=(8, 9), default=8,
+                        help='Explicit matching runtime ABI; ABI9 retains experimental candidate metadata')
     parser.add_argument('--cuda-dir', required=True, type=Path)
     parser.add_argument('--crt-dir', type=Path)
     parser.add_argument('--cuda-license', type=Path, help='CUDA license (text or PDF) when not at toolkit/EULA.txt')
@@ -28,6 +30,18 @@ def main():
     parser.add_argument('--output', type=Path, default=ROOT / 'dist')
     args = parser.parse_args()
     windows = args.platform == 'windows'
+    runtime_info = None
+    runtime_info_path = args.runtime_dir / 'NEXUS_RUNTIME.json'
+    if not runtime_info_path.is_file() or runtime_info_path.is_symlink():
+        raise ValueError('A regular runtime ABI sidecar is required for packaging')
+    if runtime_info_path.exists():
+        runtime_info = json.loads(runtime_info_path.read_text())
+        # ABI9 is opt-in: never reuse an ABI8 cache or erase its experimental flag.
+        if (not isinstance(runtime_info, dict) or
+                type(runtime_info.get('application_abi')) is not int or
+                runtime_info.get('application_abi') != args.runtime_abi or
+                runtime_info.get('candidate_only') is not (args.runtime_abi == 9)):
+            raise ValueError('Runtime sidecar does not match the explicitly selected worker runtime ABI')
     version = (ROOT / 'VERSION').read_text().strip()
     if not re.fullmatch(r'\d+\.\d+\.\d+', version):
         parser.error('invalid source version')
@@ -47,6 +61,8 @@ def main():
         copy(args.worker_dir / ('nexus-live-cuda-worker' + ext))
         copy(args.oracle, 'nexus-m21-oracle' + ext)
         copy(args.runtime_dir / ('keryx-llama.dll' if windows else 'libkeryx-llama.so'))
+        if runtime_info is not None:
+            copy(runtime_info_path, 'INFERENCE_RUNTIME.json')
         # Explicit redistributable runtime names; never copy driver stubs,
         # models, wallet files or a user's installation directory wholesale.
         patterns = ('cudart64_*.dll', 'cublas64_*.dll', 'cublasLt64_*.dll') if windows else (
@@ -85,6 +101,10 @@ def main():
             'platform': args.platform, 'architecture': 'x86_64', 'cuda_architecture': 'sm_86',
             'inference_source': 'https://github.com/ggml-org/llama.cpp/tree/12127defda4f41b7679cb2477a4b0d65ee6a0c8f',
             'inference_patch_sha256': hashlib.sha256((ROOT / 'vendor/keryx-trace-abi6/tools/keryx-llama/patches/0001-canonical-trace.patch').read_bytes()).hexdigest(),
+            'inference_application_abi': runtime_info['application_abi'] if runtime_info else None,
+            'inference_runtime_candidate_only': runtime_info['candidate_only'],
+            'inference_patch_set_sha256': runtime_info.get('patch_set_sha256'),
+            'inference_wrapper_sha256': runtime_info.get('wrapper_sha256'),
             'dependency_imports_checked': bool(args.inspector),
             'status': 'experimental-native-cli', 'gpu_execution_validated': False,
             'h15_complete': False, 'desktop_included': False,

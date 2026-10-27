@@ -46,6 +46,8 @@ public:
   // from the immutable request; never reset a record that could already have reached the node.
   bool reconsider_unsubmitted_not_assigned(std::string_view request_id);
   bool reset_pre_submission(std::string_view request_id);
+  // Only after the native audit store verifies the persisted signed response.
+  bool recover_persisted_response(std::string_view request_id,std::string_view txid);
   bool transition(std::string_view request_id, ResponseState next,
                   std::string transaction_id = {});
   // A selected-chain removal is distinct from RPC acknowledgement. Keep the
@@ -59,7 +61,30 @@ private:
   void append_locked(const ResponseJournalRecord &record);
   std::filesystem::path path_;
   mutable std::mutex mutex_;
-  std::unordered_map<std::string, ResponseJournalRecord> records_;
+  // Query exact string_view spans without constructing a temporary ID string.
+  struct RequestIdHash {
+    using is_transparent = void;
+    std::size_t operator()(std::string_view id) const noexcept {
+      return std::hash<std::string_view>{}(id);
+    }
+  };
+  std::unordered_map<std::string, ResponseJournalRecord, RequestIdHash, std::equal_to<>> records_;
+  template<class Index>
+  static auto find_record(Index &index, std::string_view id) {
+    // The common first-record case needs only an exact byte comparison; avoid
+    // hashing a 64-byte ID when there cannot be a competing bucket entry.
+    if (index.size() == 1) {
+      const auto it = index.begin();
+      return it->first == id ? it : index.end();
+    }
+    return index.find(id);
+  }
+};
+
+struct AiTracedAnswer {
+ std::string answer;
+ std::vector<std::uint8_t> sealed_plaintext;
+ std::array<std::uint8_t,73> commitment{};
 };
 
 struct AiResponseEffects {
@@ -69,6 +94,10 @@ struct AiResponseEffects {
   // Observability failures must not change transaction/journal semantics.
   std::function<void(std::string_view phase, std::uint64_t elapsed_ns)> phase_timing;
   std::function<std::string(std::string_view prompt, std::uint32_t max_tokens)> infer;
+  std::function<AiTracedAnswer(std::string_view,std::uint32_t,const std::array<std::uint8_t,32>&)> infer_traced;
+  // Must fsync trace and audit intent before SUBMITTING; never sends a transaction.
+  std::function<void(std::string_view,std::span<const std::uint8_t>,std::uint64_t,std::uint64_t)> persist_trace;
+  std::function<std::optional<std::string>(const std::array<std::uint8_t,32>&)> recover_traced;
   std::function<std::array<std::uint8_t, 34>(std::span<const std::uint8_t> body)> publish_and_readback;
   struct SubmitResult {
     enum class State { Acknowledged, Rejected, Unknown } state{State::Unknown};
@@ -86,6 +115,7 @@ struct AiResponseEffects {
 };
 
 struct AiResponseConfig {
+  bool native_h15{};
   std::array<std::uint8_t, 32> escrow_secret{};
   std::array<std::uint8_t, 32> escrow_pubkey{};
   std::array<std::uint8_t, 64> delegation_signature{};
@@ -127,14 +157,17 @@ private:
   std::unordered_map<std::string, std::unordered_set<std::string>> blocks_by_response_;
 };
 
-// Official C ABI bridge backed by the unmodified keryx-inference crate at dc724af.
+// Official protocol primitives. Encrypted request bytes remain immutable; responder keys
+// stay in Rust. Requester secrets use the upstream 32/33-byte tagged encoding.
+// Bounded CPU-only estimate; opens and inflates a private prompt without logging it.
+std::optional<std::uint32_t> stock_request_prompt_size(const protowire::RpcTransaction &,
+    const std::array<std::uint8_t,32> &escrow_secret);
 int stock_open_request(std::span<const std::uint8_t> payload,
                        const std::array<std::uint8_t, 32> &escrow_secret,
                        std::vector<std::uint8_t> &prompt,
-                       std::array<std::uint8_t, 32> &root_key,
                        bool &is_private);
 std::vector<std::uint8_t> stock_seal_private_response(
-    const std::array<std::uint8_t, 32> &root_key,
+    std::span<const std::uint8_t> request_payload,
     const std::array<std::uint8_t, 32> &request_hash,
     const std::array<std::uint8_t, 32> &escrow_secret,
     std::span<const std::uint8_t> answer);
@@ -147,8 +180,13 @@ std::vector<std::uint8_t> stock_build_signed_response(
 bool stock_verify_response(std::span<const std::uint8_t> payload,
                            const std::array<std::uint8_t, 32> &request_hash,
                            const std::array<std::uint8_t, 32> &escrow_pubkey,
-                           const std::optional<std::array<std::uint8_t, 32>> &requester_root_key,
+                           const std::optional<std::vector<std::uint8_t>> &requester_secret,
                            std::vector<std::uint8_t> *opened_answer = nullptr);
+// Authenticate the exact sealed bytes after signing; a miner never holds a requester secret.
+bool stock_verify_built_response(std::span<const std::uint8_t> payload,
+                           const std::array<std::uint8_t, 32> &request_hash,
+                           const std::array<std::uint8_t, 32> &escrow_pubkey,
+                           std::span<const std::uint8_t> sealed_body);
 // Authenticate a public/private response observed on-chain without opening its
 // encrypted answer. This does not attest inference correctness or finality.
 bool stock_verify_response_signature(std::span<const std::uint8_t> payload,

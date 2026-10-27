@@ -1,0 +1,6 @@
+{
+  "repository": "https://github.com/Keryx-Labs/keryx-miner",
+  "commit": "4f46a984adc33fdbf51f390526d41622448c4fc2",
+  "scope": "src/pom_v5.rs only; other trace/runtime files retain UPSTREAM.json pin",
+  "sha256": "0f293ccf48f298163e916eb40fd02665cdede1e7645ff986e67cfe7350b68d35"
+}

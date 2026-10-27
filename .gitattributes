@@ -1,2 +1,13 @@
 # Canonical patches must retain their bytes when applied to upstream archives.
 vendor/keryx-trace-abi6/tools/keryx-llama/patches/*.patch text eol=lf
+
+# ABI9 source/provenance hashes are byte-exact on native Windows checkouts.
+vendor/keryx-trace-abi6/tools/keryx-llama/abi9/keryx_llama.cpp text eol=lf
+tools/runtime/abi9-patches.json text eol=lf
+
+# Verifier provenance records pin the original source bytes.
+vendor/keryx-verifiable-inference/src/*.rs text eol=lf
+vendor/keryx-verifiable-inference/Cargo.toml text eol=lf
+
+# Retain the pinned upstream file's original trailing blank line.
+vendor/keryx-verifiable-inference/src/chain.rs whitespace=-blank-at-eof

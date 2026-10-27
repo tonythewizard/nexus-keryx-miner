@@ -28,7 +28,7 @@ def release_version():
         value = (Path(__file__).resolve().parents[1] / "VERSION").read_text().strip()
         if re.fullmatch(r"\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?", value): return value
     except OSError: pass
-    return "0.0.3"
+    return "0.0.4"
 
 
 RELEASE_VERSION = release_version()
@@ -46,9 +46,47 @@ MATRIX_WARN = 5
 MATRIX_ERROR = 6
 
 
+class SessionLog:
+    """Append-only session rows; snapshots share immutable rows with a fixed end."""
+    def __init__(self, entries=None, end=None):
+        self._entries = [] if entries is None else entries
+        self._end = end
+
+    def __len__(self):
+        return len(self._entries) if self._end is None else self._end
+
+    def __getitem__(self, key):
+        if isinstance(key, slice):
+            start, stop, step = key.indices(len(self))
+            return [self._entries[index] for index in range(start, stop, step)]
+        if key < 0: key += len(self)
+        if not 0 <= key < len(self): raise IndexError(key)
+        return self._entries[key]
+
+    def append(self, row):
+        if self._end is not None: raise TypeError('Session log snapshot is read-only')
+        self._entries.append(row)
+
+    def __deepcopy__(self, memo):
+        return SessionLog(self._entries, len(self))
+
+    def page(self, before=None, limit=100):
+        if before is not None and (type(before) is not int or before < 0):
+            raise ValueError('Invalid history cursor')
+        total = len(self)
+        end = total if before is None else min(before, total)
+        start = max(0, end - limit)
+        return self[start:end], {'total': total, 'start': start, 'end': end,
+                                'older_before': start if start else None,
+                                'has_newer': end < total,
+                                'newer_before': end + limit if end + limit < total else None,
+                                'live': before is None}
+
+
 class DashboardModel:
     def __init__(self):
         self.events = deque(maxlen=400)
+        self.log_history = {name: SessionLog() for name in ('SUBMIT', 'ERROR')}
         self._response_lifecycle_seen = set()
         self._assigned_request_ids = set()
         self._received_request_ids = set()
@@ -178,6 +216,8 @@ class DashboardModel:
                 timestamp -= (time.monotonic_ns() - observed_ns) / 1e9
             item = (time.strftime("%H:%M:%S", time.localtime(timestamp)), event, event_summary(obj))
             self.events.append(item)
+            for selected, history in self.log_history.items():
+                if event_matches(event, selected, obj): history.append(item)
             if important_event(event): self.milestones.append(item)
         if event == "NEXUS_TELEMETRY":
             self._ingest_native_snapshot(obj)
@@ -762,11 +802,11 @@ def event_summary(obj):
     """Readable event details; prompts, payloads, certificates and secrets excluded."""
     event = str(obj.get("event", "OUTPUT"))
     fields = []
-    for key in ("state", "status", "generation", "daa", "nonce", "stage", "reason", "reject_reason", "hash", "selected_chain", "availability", "pending", "duration_ms"):
+    for key in ("state", "status", "request_id", "txid", "generation", "daa", "nonce", "stage", "reason", "reject_reason", "hash", "selected_chain", "availability", "pending", "duration_ms"):
         value = obj.get(key)
         if value is None: continue
         text = str(value).replace("\n", " ").replace("\r", " ")
-        if key == "hash": text = text[:12] + "…" + text[-6:]
+        if key in ("hash", "request_id", "txid"): text = text[:12] + "…" + text[-6:]
         if key == "duration_ms":
             try: text = f"{float(value):.2f} ms"
             except (ValueError, TypeError): continue
@@ -777,9 +817,31 @@ def event_summary(obj):
     return " · ".join(fields) or event.replace("_", " ")
 
 
-def event_matches(event, selected):
+def event_matches(event, selected, obj=None):
     if selected == "ALL": return True
-    groups = {"AI": ("AI_", "OPOI", "INFERENCE"), "SUBMIT": ("SUBMIT", "CHAIN", "RPC_ACKNOWLEDGED", "RPC_REJECTED", "TARGET"),
+    obj = obj or {}
+    event = event.upper()
+    state = str(obj.get('state', '')).upper()
+    if selected == 'SUBMIT':
+        if event in ('LIVE_SUBMIT_RESULT', 'LIVE_H15_SUBMIT_RESULT'):
+            return state in ('RPC_ACKNOWLEDGED', 'RPC_REJECTED', 'UNKNOWN_AFTER_TIMEOUT', 'UNKNOWN_OUTCOME')
+        if event == 'LIVE_CHAIN_STATUS':
+            return state in ('CHAIN_CONFIRMED', 'CHAIN_OBSERVED')
+        if event == 'AI_RESPONSE_LIFECYCLE':
+            return state in ('RPC_ACKNOWLEDGED', 'CHAIN_OBSERVED', 'FINALIZED', 'FAILED',
+                             'EXPIRED', 'RPC_REJECTED', 'UNKNOWN_AFTER_TIMEOUT')
+        if event == 'AI_RESPONSE_SUBMISSION':
+            return obj.get('reason') in ('RPC_ACKNOWLEDGED', 'RPC_OUTCOME_UNKNOWN',
+                                         'RPC_REJECTED_PERMANENT_OR_UNCLASSIFIED')
+        return event in ('AI_RESPONSE_SUBMITTED', 'AI_RESPONSE_CONFIRMED',
+                         'AI_RESPONSE_CHAIN_OBSERVED', 'AI_RESPONSE_FAILED', 'AI_RESPONSE_ERROR')
+    if selected == 'ERROR':
+        if event == 'AI_RESPONSE_SUBMISSION' and obj.get('reason') in (
+                'RPC_OUTCOME_UNKNOWN', 'RPC_REJECTED_PERMANENT_OR_UNCLASSIFIED'): return True
+        outcomes = (state, str(obj.get('result', '')).upper(), str(obj.get('status', '')).upper())
+        if any(value in ('FAILED', 'FAIL', 'ERROR', 'BLOCKED', 'RPC_REJECTED', 'EXPIRED',
+                         'UNKNOWN_AFTER_TIMEOUT', 'UNKNOWN_OUTCOME') for value in outcomes): return True
+    groups = {"AI": ("AI_", "OPOI", "INFERENCE"),
               "JOB": ("JOB", "TEMPLATE", "STALE"), "ERROR": ("ERROR", "FAIL", "BLOCKED", "REJECTED")}
     return any(token in event.upper() for token in groups.get(selected, (selected,)))
 
@@ -1074,7 +1136,8 @@ def build_matrix_frame(height, width, model, gpu, child_status, tab, log_filter=
                 ("Node strike poll", m['strike_status'])]
         frame.rows(6, 1, height - 9, width - 3, "ESCROW / STRIKE MONITOR", rows)
     elif tab == 4:
-        selected = [item for item in model.events if event_matches(item[1], log_filter)]
+        selected = model.log_history.get(log_filter)
+        if selected is None: selected = [item for item in model.events if event_matches(item[1], log_filter)]
         count = max(1, height - 12); model.log_scroll = min(model.log_scroll, max(0, len(selected) - count))
         end = len(selected) - model.log_scroll; activity(6, height - 9, selected[max(0, end - count):end], "EVENT LOG / " + log_filter + (" / PAUSED SCROLL" if model.log_scroll else " / LIVE"))
     elif tab == 6:
@@ -1555,7 +1618,7 @@ def refresh_development_status(model, root):
 class TelemetryFollower:
     """Read a complete log session with bounded buffers, then drain bursts in batches."""
     history_markers = (b"NEXUS_TELEMETRY", b"STARTUP_STATE", b"NODE_INFO", b"NODE_NETWORK", b"SERVICE_STRIKE_POLL", b"AI_SERVICE_STATUS", b"AI_SERVICE_ERROR", b"AI_STARTUP_BACKFILL=", b"OPOI_RUNTIME=", b'"official_rust_verify"',
-                       b"AI_REQUEST_", b"AI_RESPONSE_", b"LIVE_SUBMIT_RESULT", b"LIVE_CHAIN_STATUS", b"ESCROW_CLAIM_SUBMISSION",
+                       b"AI_REQUEST_", b"AI_RESPONSE_", b"LIVE_SUBMIT_RESULT", b"LIVE_H15_SUBMIT_RESULT", b"LIVE_CHAIN_STATUS", b"ESCROW_CLAIM_SUBMISSION",
                        b"AMD_LANE_STATE", b"AMD_CANDIDATE_VERIFIED", b"LIVE_CUDA_NONCE=PASS", b"NVIDIA_VULKAN_CANDIDATE_VERIFIED", b"POM_BACKEND_SELECTED")
     def __init__(self, path):
         self.path = Path(path).resolve()
@@ -1578,15 +1641,19 @@ class TelemetryFollower:
         except (ValueError, TypeError, AttributeError): pass
 
     def bootstrap(self, model):
-        # All block and AI lifecycle records are counted, including those outside
-        # the last 2 MiB. Only recent noisy events are decoded/rendered.
+        # Replay every outcome/error, even outside the recent noisy tail.
         end = os.fstat(self.source.fileno()).st_size
         tail_start = max(0, end - 2 * 1024 * 1024); position = 0
         while self.source.tell() < end:
             data = self.pending + self.source.read(min(512 * 1024, end - self.source.tell()))
             lines = data.split(b"\n"); self.pending = lines.pop()
             for raw in lines:
-                if position < 256 * 1024 or position >= tail_start or any(marker in raw for marker in self.history_markers):
+                replay = (position < 256 * 1024 or position >= tail_start or
+                          any(marker in raw for marker in self.history_markers))
+                if not replay:
+                    upper = raw.upper()
+                    replay = any(marker in upper for marker in (b'ERROR', b'FAIL', b'BLOCKED', b'REJECTED', b'EXPIRED'))
+                if replay:
                     self.ingest_record(model, raw)
                 position += len(raw) + 1
             if len(self.pending) > 1024 * 1024:

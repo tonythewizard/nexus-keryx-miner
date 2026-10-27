@@ -21,4 +21,8 @@ inline const Walk &verified_walk_view(const Walk &cpu,
       throw std::runtime_error("CPU/CUDA witness state mismatch");
   return cpu;
 }
+// A borrowed witness must never refer to a temporary CPU walk.
+const Walk &verified_walk_view(const Walk &&,
+                              std::span<const std::uint64_t>,
+                              std::span<const std::uint8_t>) = delete;
 } // namespace keryx::nexus::consensus

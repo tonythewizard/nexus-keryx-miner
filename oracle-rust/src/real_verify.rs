@@ -42,11 +42,7 @@ pub fn verify_bytes(c: &[u8], tr: &[u8], proof_bytes: &[u8]) -> String {
     let wire_len = u32le(&c, &mut p) as usize;
     let wire = take(&c, &mut p, wire_len);
     assert_eq!(p, c.len(), "trailing proof context bytes");
-    assert_eq!(
-        proof_bytes,
-        wire,
-        "proof/context mismatch"
-    );
+    assert_eq!(proof_bytes, wire, "proof/context mismatch");
     keryx_consensus_core::pom::init_pom_level_activation(43_450_000);
     keryx_consensus_core::pom::init_service_commit_activation(76_316_623);
     keryx_consensus_core::pom::init_pom_seed_h10_activation(87_360_000);
@@ -79,6 +75,21 @@ pub fn verify_bytes(c: &[u8], tr: &[u8], proof_bytes: &[u8]) -> String {
     let states = take(&tr, &mut q, nstates * 1024);
     let offsets = take(&tr, &mut q, noffsets * 8);
     assert_eq!(q, tr.len(), "trailing C++ trace bytes");
+    if daa >= keryx_consensus_core::config::params::H15_ACTIVATION_DAA {
+        let derived = crate::v5::verify_native(
+            seed, chunks, tier, &root, &target, &pph, &proof, states, offsets,
+        );
+        assert_eq!(derived, claimed_final);
+        assert_eq!(proof.pow_value, claimed_pow);
+        assert_eq!(proof.to_wire_bytes(), wire, "noncanonical v5 wire");
+        assert!(PomProof::from_wire_bytes(&wire[..wire.len() - 1]).is_err());
+        assert_ne!(
+            pom_block_seed_rewalk_era(&pph, timestamp.wrapping_add(1), nonce, daa),
+            seed
+        );
+        let target_met = claimed_pow.iter().rev().cmp(target.iter().rev()) != Ordering::Greater;
+        return format!("OFFICIAL_RUST_REAL_MODEL=PASS era=H15 states=257 offsets=256 Borsh=BYTE_IDENTICAL proof_bytes={} generation={} seed_binding=PASS negative_tile_sibling_pad_root_tier_nonce_timestamp_borsh=PASS target_satisfied={} container={}",wire.len(),generation,target_met,if target_met {"PASS"} else {"TARGET_NOT_MET"});
+    }
     let official_offsets = pom_v4::v4_offset_chain(seed, &v4.tiles, chunks / 32);
     for (i, &off) in official_offsets.iter().enumerate() {
         let cpp = u64::from_le_bytes(offsets[i * 8..i * 8 + 8].try_into().unwrap());

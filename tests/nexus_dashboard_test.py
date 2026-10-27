@@ -17,6 +17,99 @@ SPEC.loader.exec_module(dashboard)
 
 
 class DashboardTests(unittest.TestCase):
+    def test_submit_contains_only_block_and_ai_outcomes(self):
+        included = [
+            ('LIVE_SUBMIT_RESULT', {'state': 'RPC_ACKNOWLEDGED'}),
+            ('LIVE_H15_SUBMIT_RESULT', {'state': 'RPC_REJECTED'}),
+            ('LIVE_CHAIN_STATUS', {'state': 'CHAIN_CONFIRMED'}),
+            ('LIVE_CHAIN_STATUS', {'state': 'CHAIN_OBSERVED', 'selected_chain': False}),
+            ('AI_RESPONSE_LIFECYCLE', {'state': 'FAILED'}),
+            ('AI_RESPONSE_LIFECYCLE', {'state': 'RPC_ACKNOWLEDGED'}),
+            ('AI_RESPONSE_LIFECYCLE', {'state': 'UNKNOWN_AFTER_TIMEOUT'}),
+            ('AI_RESPONSE_SUBMISSION', {'reason': 'RPC_REJECTED_PERMANENT_OR_UNCLASSIFIED'}),
+            ('AI_RESPONSE_SUBMISSION', {'reason': 'RPC_ACKNOWLEDGED'}),
+        ]
+        excluded = [
+            ('ESCROW_CHAIN_GETBLOCK_SENT', {}), ('ESCROW_CLAIM_SUBMISSION', {}),
+            ('LIVE_CUDA_NONCE=PASS', {'target_satisfied': True}),
+            ('LIVE_TEMPLATE', {}), ('LIVE_SUBMIT_RESULT', {'state': 'SUBMIT_SENT'}),
+            ('AI_RESPONSE_LIFECYCLE', {'state': 'SUBMITTING'}),
+            ('AI_RESPONSE_LIFECYCLE', {'state': 'NOT_ASSIGNED'}),
+            ('AI_RESPONSE_SUBMISSION', {'reason': 'PRIVATE_REQUEST_CONTEXT_PENDING'}),
+            ('INFERENCE_SELF_TEST=PASS', {}),
+        ]
+        for event, obj in included:
+            self.assertTrue(dashboard.event_matches(event, 'SUBMIT', obj), (event, obj))
+        for event, obj in excluded:
+            self.assertFalse(dashboard.event_matches(event, 'SUBMIT', obj), (event, obj))
+        self.assertTrue(dashboard.event_matches('STARTUP_STATE', 'ERROR', {'result': 'BLOCKED'}))
+        self.assertTrue(dashboard.event_matches('AI_RESPONSE_LIFECYCLE', 'ERROR', {'state': 'FAILED'}))
+
+    def test_session_history_survives_noisy_tail_and_snapshot_is_fixed(self):
+        model = dashboard.DashboardModel()
+        for index in range(240):
+            model.ingest(json.dumps({'event': 'LIVE_SUBMIT_RESULT', 'state': 'RPC_ACKNOWLEDGED',
+                                     'hash': f'{index:064x}'}))
+        model.ingest('{"event":"TRANSPORT_ERROR","reason":"fixture"}')
+        before = model.presentation_copy()
+        for _ in range(700): model.ingest('ESCROW_CHAIN_GETBLOCK_SENT id=1')
+        self.assertEqual(len(model.log_history['SUBMIT']), 240)
+        self.assertEqual(len(model.log_history['ERROR']), 1)
+        rows, live = before.log_history['SUBMIT'].page()
+        self.assertEqual(len(rows), 100)
+        self.assertEqual((live['start'], live['end']), (140, 240))
+        older, page = before.log_history['SUBMIT'].page(live['older_before'])
+        self.assertEqual((page['start'], page['end']), (40, 140))
+        model.ingest('{"event":"AI_RESPONSE_LIFECYCLE","state":"FAILED","request_id":"fixture"}')
+        self.assertEqual(len(model.log_history['SUBMIT']), 241)
+        self.assertEqual(len(before.log_history['SUBMIT']), 240)
+        self.assertEqual(model.log_history['SUBMIT'].page(140)[0], older)
+        self.assertEqual(before.log_history['SUBMIT'].page()[0], rows)
+        with self.assertRaises(TypeError): before.log_history['SUBMIT'].append(('x', 'x', 'x'))
+        with self.assertRaises(ValueError): model.log_history['SUBMIT'].page(True)
+
+    def test_error_and_submit_recover_from_entire_session_then_append_live(self):
+        path = pathlib.Path(sys.argv[1]) / f'history-{os.getpid()}.jsonl'
+        noise = json.dumps({'worker': {'event': 'NOISY_FIXTURE', 'detail': 'x' * 512}}) + '\n'
+        with path.open('w') as stream:
+            stream.write('{"worker":{"event":"LIVE_SUBMIT_RESULT","state":"RPC_ACKNOWLEDGED"}}\n')
+            stream.write(noise * 1000)
+            stream.write('{"worker":{"event":"LIVE_H15_SUBMIT_RESULT","state":"RPC_ACKNOWLEDGED"}}\n')
+            stream.write('{"worker":{"event":"TRANSPORT_ERROR","reason":"old middle error"}}\n')
+            stream.write(noise * 6000)
+        model = dashboard.DashboardModel()
+        follower = dashboard.TelemetryFollower(path); self.addCleanup(follower.close)
+        follower.bootstrap(model)
+        self.assertTrue(model.history_complete)
+        self.assertEqual(len(model.log_history['SUBMIT']), 2)
+        self.assertEqual(len(model.log_history['ERROR']), 1)
+        self.assertIn('old middle error', model.log_history['ERROR'][0][2])
+        with path.open('a') as stream:
+            stream.write('{"worker":{"event":"AI_RESPONSE_LIFECYCLE","state":"FAILED"}}\n')
+        follower.drain(model)
+        self.assertEqual(len(model.log_history['SUBMIT']), 3)
+        self.assertEqual(len(model.log_history['ERROR']), 2)
+        reopened = dashboard.DashboardModel()
+        again = dashboard.TelemetryFollower(path); self.addCleanup(again.close)
+        again.bootstrap(reopened)
+        self.assertEqual([row[1:] for row in reopened.log_history['SUBMIT'][:]],
+                         [row[1:] for row in model.log_history['SUBMIT'][:]])
+
+    def test_log_presenter_pages_full_history_in_bounded_frames(self):
+        from nexus_presenter import build_presenter_frame
+        from nexus_ui_preferences import DEFAULTS
+        model = dashboard.DashboardModel()
+        for _ in range(230): model.ingest('{"event":"AI_RESPONSE_LIFECYCLE","state":"RPC_ACKNOWLEDGED"}')
+        frame = build_presenter_frame(46, 160, model, 'UNKNOWN', 4, 'SUBMIT', preferences=DEFAULTS)
+        panel = frame.panels[0]
+        self.assertEqual(len(panel['table_rows']), 100)
+        self.assertEqual(panel['log_history']['total'], 230)
+        first = build_presenter_frame(46, 160, model, 'UNKNOWN', 4, 'SUBMIT',
+                                      preferences=DEFAULTS, log_before=30).panels[0]
+        self.assertEqual(len(first['table_rows']), 30)
+        self.assertIsNone(first['log_history']['older_before'])
+        self.assertTrue(first['log_history']['has_newer'])
+
     def test_native_inference_span_is_labelled_with_sampling_uncertainty(self):
         m = dashboard.DashboardModel(); first = self.native_snapshot()
         m.ingest(json.dumps(first))
@@ -378,7 +471,7 @@ class DashboardTests(unittest.TestCase):
     def test_arrow_navigation_event_filters_and_responsive_frame_bounds(self):
         self.assertEqual(dashboard.select_page(9, 7), 0)
         self.assertEqual(dashboard.select_page(dashboard.curses.KEY_LEFT, 0), 7)
-        self.assertTrue(dashboard.event_matches("LIVE_CHAIN_STATUS", "SUBMIT"))
+        self.assertTrue(dashboard.event_matches("LIVE_CHAIN_STATUS", "SUBMIT", {"state": "CHAIN_CONFIRMED"}))
         self.assertTrue(dashboard.event_matches("LIVE_TEMPLATE", "JOB"))
         self.assertTrue(dashboard.event_matches("LIVE_SUBMIT_RPC_REJECTED", "ERROR"))
         m = dashboard.DashboardModel(); m.ingest(json.dumps(self.native_snapshot()))

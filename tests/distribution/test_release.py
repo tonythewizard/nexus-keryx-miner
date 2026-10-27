@@ -32,10 +32,57 @@ class Release(unittest.TestCase):
                      'cuda/bin/cublas64_13.dll', 'cuda/bin/cublasLt64_13.dll',
                      'worker/private-wallet.key', 'engine/DO-NOT-PACK.key'):
             (self.root / name).write_text('synthetic packaging fixture')
+        (self.root / 'engine/NEXUS_RUNTIME.json').write_text(json.dumps({'application_abi': 8, 'candidate_only': False}))
         return [sys.executable, str(ROOT / 'tools/package_release.py'), '--platform', 'windows',
                 '--worker-dir', str(self.root / 'worker'), '--oracle', str(self.root / 'oracle.exe'),
                 '--runtime-dir', str(self.root / 'engine'), '--cuda-dir', str(self.root / 'cuda/bin'),
                 '--output', str(self.root / 'out')]
+
+    def test_missing_runtime_sidecar_is_refused_before_packaging(self):
+        args = self.package_inputs()
+        (self.root / 'engine/NEXUS_RUNTIME.json').unlink()
+        result = subprocess.run(args, capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('runtime ABI sidecar is required', result.stderr)
+        self.assertFalse(list((self.root / 'out').glob('*')))
+
+    def test_abi9_candidate_is_refused_before_packaging(self):
+        args = self.package_inputs()
+        (self.root / 'engine/NEXUS_RUNTIME.json').write_text(json.dumps({'application_abi': 9, 'candidate_only': True}))
+        result = subprocess.run(args, capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('explicitly selected worker runtime ABI', result.stderr)
+        self.assertFalse(list((self.root / 'out').glob('*')))
+
+    def test_abi8_runtime_sidecar_is_retained_and_identified(self):
+        args = self.package_inputs()
+        info = {'application_abi': 8, 'candidate_only': False}
+        (self.root / 'engine/NEXUS_RUNTIME.json').write_text(json.dumps(info))
+        subprocess.run(args, check=True, capture_output=True)
+        with zipfile.ZipFile(next((self.root / 'out').glob('*.zip'))) as packed:
+            files = {Path(name).name: packed.read(name) for name in packed.namelist()}
+            self.assertEqual(json.loads(files['INFERENCE_RUNTIME.json']), info)
+            self.assertEqual(json.loads(files['BUILD.json'])['inference_application_abi'], 8)
+
+    def test_explicit_abi9_preserves_experimental_metadata(self):
+        args = self.package_inputs() + ['--runtime-abi', '9']
+        info = {'application_abi': 9, 'candidate_only': True,
+                'patch_set_sha256': 'a' * 64, 'wrapper_sha256': 'b' * 64}
+        (self.root / 'engine/NEXUS_RUNTIME.json').write_text(json.dumps(info))
+        subprocess.run(args, check=True, capture_output=True)
+        with zipfile.ZipFile(next((self.root / 'out').glob('*.zip'))) as packed:
+            files = {Path(name).name: packed.read(name) for name in packed.namelist()}
+            self.assertEqual(json.loads(files['INFERENCE_RUNTIME.json']), info)
+            build = json.loads(files['BUILD.json'])
+            self.assertEqual(build['inference_application_abi'], 9)
+            self.assertTrue(build['inference_runtime_candidate_only'])
+            self.assertEqual(build['inference_patch_set_sha256'], 'a' * 64)
+
+    def test_explicit_abi9_rejects_abi8_cache(self):
+        args = self.package_inputs() + ['--runtime-abi', '9']
+        result = subprocess.run(args, capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(list((self.root / 'out').glob('*')))
 
     def test_archive_allowlist_and_checksums(self):
         subprocess.run(self.package_inputs(), check=True, capture_output=True)

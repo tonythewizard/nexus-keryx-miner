@@ -1,0 +1,143 @@
+{
+  "schema_version": 1,
+  "application_abi": 9,
+  "miner_commit": "c21c873726049195a3a40af6f19a013fc44ebd82",
+  "llama_commit": "12127defda4f41b7679cb2477a4b0d65ee6a0c8f",
+  "llama_archive_sha256": "4542268daecd0b70e8e6dba964bd70d68993fdb933d7469f1dcf20ba4d60c952",
+  "wrapper": {
+    "path": "vendor/keryx-trace-abi6/tools/keryx-llama/abi9/keryx_llama.cpp",
+    "sha256": "7b870ed15b8b983d814c41ac724133db24d82550afe338c433154e2ec586e8b7"
+  },
+  "patches": [
+    {
+      "path": "vendor/keryx-trace-abi6/tools/keryx-llama/patches/0001-canonical-trace.patch",
+      "sha256": "3799b9dd13f7d462c28529c8a11aef65ab1792fefcf34977d1904c5e6da66d1b"
+    },
+    {
+      "path": "vendor/keryx-trace-abi6/tools/keryx-llama/patches/0002-sequence-leaves.patch",
+      "sha256": "ced1056558237d20050224c843f8e4008f833f759890b164e28e726f71017718"
+    },
+    {
+      "path": "vendor/keryx-trace-abi6/tools/keryx-llama/patches/0003-fattn-tile-f32.patch",
+      "sha256": "b5a8f5ff9951972be10e1d4971f9507a0640e85333bb2b1ab3694b86250f72b7"
+    },
+    {
+      "path": "vendor/keryx-trace-abi6/tools/keryx-llama/patches/0004-rope-f64-angle.patch",
+      "sha256": "b15e92b242adc94fb1076932c284414906140fc6bbd7866e0c09fce95739eb4c"
+    },
+    {
+      "path": "vendor/keryx-trace-abi6/tools/keryx-llama/patches/0005-attn-lse-capture.patch",
+      "sha256": "4e4f99e79d9da5cd29af1ed018434d18befe93b19f6932980aa5d6a3a20bb913"
+    }
+  ],
+  "stages": [
+    {
+      "name": "pristine",
+      "files": {
+        "ggml/src/ggml-cuda/fattn-common.cuh": "47537d7980d81f7dc9daa18698f5fdbb990ef6b916fa75fed4bc0bbfd1aa08cb",
+        "ggml/src/ggml-cuda/fattn-tile.cuh": "a7f895b618b579b3069d80bb7ea86d8b51fc46829af7bd58986d3af391b6b17c",
+        "ggml/src/ggml-cuda/fattn.cu": "346e87241847effac1c9fc4a1238b0befb3860dd053c925d972aec43affd7e42",
+        "ggml/src/ggml-cuda/gated_delta_net.cu": "fe5cfe4a35195fac999e8bd93d3ed18c68830096d4019bafa60e5da91d6ef4bf",
+        "ggml/src/ggml-cuda/gated_delta_net.cuh": "5a155069868ffb238d90503ae380e68a6d1baa4abb9c0292f369fb0045ffffda",
+        "ggml/src/ggml-cuda/ggml-cuda.cu": "04987b82f83f3c81311c3f92a970d6815a8287fbe53f84f557b4a95f315daabd",
+        "ggml/src/ggml-cuda/mmq.cu": "87505af8244c518f9b069fb0ca2a9cf2ffe15426a332bfdef31b4f9cbc263254",
+        "ggml/src/ggml-cuda/mmvq.cu": "7dd8df4666d524a749c0e1aafe8f6fb99a3ea565b4a2fc3ce957a406ab3d4776",
+        "ggml/src/ggml-cuda/q8canon.cu": null,
+        "ggml/src/ggml-cuda/q8canon.cuh": null,
+        "ggml/src/ggml-cuda/q8seq.cu": null,
+        "ggml/src/ggml-cuda/q8seq.cuh": null,
+        "ggml/src/ggml-cuda/rope.cu": "8286f7b57bb76ab490e05d42cb8262ad886b85a8fdaaef63d6538b7ff06940b2"
+      }
+    },
+    {
+      "name": "0001-canonical-trace.patch",
+      "files": {
+        "ggml/src/ggml-cuda/fattn-common.cuh": "47537d7980d81f7dc9daa18698f5fdbb990ef6b916fa75fed4bc0bbfd1aa08cb",
+        "ggml/src/ggml-cuda/fattn-tile.cuh": "a7f895b618b579b3069d80bb7ea86d8b51fc46829af7bd58986d3af391b6b17c",
+        "ggml/src/ggml-cuda/fattn.cu": "346e87241847effac1c9fc4a1238b0befb3860dd053c925d972aec43affd7e42",
+        "ggml/src/ggml-cuda/gated_delta_net.cu": "fe5cfe4a35195fac999e8bd93d3ed18c68830096d4019bafa60e5da91d6ef4bf",
+        "ggml/src/ggml-cuda/gated_delta_net.cuh": "5a155069868ffb238d90503ae380e68a6d1baa4abb9c0292f369fb0045ffffda",
+        "ggml/src/ggml-cuda/ggml-cuda.cu": "7b2fe55e589f367573b65649a32f6f5bbcb71400fb06e4fac66c55a6b32a9360",
+        "ggml/src/ggml-cuda/mmq.cu": "3b15c7d79e924b34117193b75add652c38cc1bedf05c2829ce97aa6cfff69b1f",
+        "ggml/src/ggml-cuda/mmvq.cu": "38bfd889e896909a0654aab379bbb8946e8f051e1cc51d2c637c82cda301fd7c",
+        "ggml/src/ggml-cuda/q8canon.cu": "ac37889971fdbeaf39a74b8e44acd2f63e58e0c07f97d710fd9a9cd1c9028b99",
+        "ggml/src/ggml-cuda/q8canon.cuh": "07b49813c6221cb10021cd722e0739f364a8f6705eff6b6f9000eb24e563ed3d",
+        "ggml/src/ggml-cuda/q8seq.cu": null,
+        "ggml/src/ggml-cuda/q8seq.cuh": null,
+        "ggml/src/ggml-cuda/rope.cu": "8286f7b57bb76ab490e05d42cb8262ad886b85a8fdaaef63d6538b7ff06940b2"
+      }
+    },
+    {
+      "name": "0002-sequence-leaves.patch",
+      "files": {
+        "ggml/src/ggml-cuda/fattn-common.cuh": "47537d7980d81f7dc9daa18698f5fdbb990ef6b916fa75fed4bc0bbfd1aa08cb",
+        "ggml/src/ggml-cuda/fattn-tile.cuh": "a7f895b618b579b3069d80bb7ea86d8b51fc46829af7bd58986d3af391b6b17c",
+        "ggml/src/ggml-cuda/fattn.cu": "346e87241847effac1c9fc4a1238b0befb3860dd053c925d972aec43affd7e42",
+        "ggml/src/ggml-cuda/gated_delta_net.cu": "edc1d19331b3ae631051e150ad6e72e2d10859a12a8919f9090a9f38a8054141",
+        "ggml/src/ggml-cuda/gated_delta_net.cuh": "9f9fe193bc79d56ef75d602b151a4637cfb7117288cd3490d55654d5ab881c1e",
+        "ggml/src/ggml-cuda/ggml-cuda.cu": "6549a51ac62f43163c3284aa88c7c9d68067ed9bfba66dafe6bea621e2ba785a",
+        "ggml/src/ggml-cuda/mmq.cu": "3b15c7d79e924b34117193b75add652c38cc1bedf05c2829ce97aa6cfff69b1f",
+        "ggml/src/ggml-cuda/mmvq.cu": "38bfd889e896909a0654aab379bbb8946e8f051e1cc51d2c637c82cda301fd7c",
+        "ggml/src/ggml-cuda/q8canon.cu": "83c4c2d1bc30b9583a2b3b87168a39c4080f962643f6b4f3a2cd85526fd5df11",
+        "ggml/src/ggml-cuda/q8canon.cuh": "07b49813c6221cb10021cd722e0739f364a8f6705eff6b6f9000eb24e563ed3d",
+        "ggml/src/ggml-cuda/q8seq.cu": "29eb2a35ee5f6370b3456ec9b0795d1502df87757161a59945a7295237c50ed6",
+        "ggml/src/ggml-cuda/q8seq.cuh": "c4e438482e3f91052493b8210b1a092329ad9adf270379247f5d2a93e3a11654",
+        "ggml/src/ggml-cuda/rope.cu": "8286f7b57bb76ab490e05d42cb8262ad886b85a8fdaaef63d6538b7ff06940b2"
+      }
+    },
+    {
+      "name": "0003-fattn-tile-f32.patch",
+      "files": {
+        "ggml/src/ggml-cuda/fattn-common.cuh": "47537d7980d81f7dc9daa18698f5fdbb990ef6b916fa75fed4bc0bbfd1aa08cb",
+        "ggml/src/ggml-cuda/fattn-tile.cuh": "5ea189b9b4bbf3a2ebd1e382754b9b36f57c1be745bb18cf0ebee8e8c76697a8",
+        "ggml/src/ggml-cuda/fattn.cu": "4020d298077e6ed81b2f3c369e81f7ea2d95ab259f72470e0cbce507114a996f",
+        "ggml/src/ggml-cuda/gated_delta_net.cu": "edc1d19331b3ae631051e150ad6e72e2d10859a12a8919f9090a9f38a8054141",
+        "ggml/src/ggml-cuda/gated_delta_net.cuh": "9f9fe193bc79d56ef75d602b151a4637cfb7117288cd3490d55654d5ab881c1e",
+        "ggml/src/ggml-cuda/ggml-cuda.cu": "6549a51ac62f43163c3284aa88c7c9d68067ed9bfba66dafe6bea621e2ba785a",
+        "ggml/src/ggml-cuda/mmq.cu": "3b15c7d79e924b34117193b75add652c38cc1bedf05c2829ce97aa6cfff69b1f",
+        "ggml/src/ggml-cuda/mmvq.cu": "38bfd889e896909a0654aab379bbb8946e8f051e1cc51d2c637c82cda301fd7c",
+        "ggml/src/ggml-cuda/q8canon.cu": "83c4c2d1bc30b9583a2b3b87168a39c4080f962643f6b4f3a2cd85526fd5df11",
+        "ggml/src/ggml-cuda/q8canon.cuh": "07b49813c6221cb10021cd722e0739f364a8f6705eff6b6f9000eb24e563ed3d",
+        "ggml/src/ggml-cuda/q8seq.cu": "29eb2a35ee5f6370b3456ec9b0795d1502df87757161a59945a7295237c50ed6",
+        "ggml/src/ggml-cuda/q8seq.cuh": "c4e438482e3f91052493b8210b1a092329ad9adf270379247f5d2a93e3a11654",
+        "ggml/src/ggml-cuda/rope.cu": "8286f7b57bb76ab490e05d42cb8262ad886b85a8fdaaef63d6538b7ff06940b2"
+      }
+    },
+    {
+      "name": "0004-rope-f64-angle.patch",
+      "files": {
+        "ggml/src/ggml-cuda/fattn-common.cuh": "47537d7980d81f7dc9daa18698f5fdbb990ef6b916fa75fed4bc0bbfd1aa08cb",
+        "ggml/src/ggml-cuda/fattn-tile.cuh": "5ea189b9b4bbf3a2ebd1e382754b9b36f57c1be745bb18cf0ebee8e8c76697a8",
+        "ggml/src/ggml-cuda/fattn.cu": "4020d298077e6ed81b2f3c369e81f7ea2d95ab259f72470e0cbce507114a996f",
+        "ggml/src/ggml-cuda/gated_delta_net.cu": "edc1d19331b3ae631051e150ad6e72e2d10859a12a8919f9090a9f38a8054141",
+        "ggml/src/ggml-cuda/gated_delta_net.cuh": "9f9fe193bc79d56ef75d602b151a4637cfb7117288cd3490d55654d5ab881c1e",
+        "ggml/src/ggml-cuda/ggml-cuda.cu": "6549a51ac62f43163c3284aa88c7c9d68067ed9bfba66dafe6bea621e2ba785a",
+        "ggml/src/ggml-cuda/mmq.cu": "3b15c7d79e924b34117193b75add652c38cc1bedf05c2829ce97aa6cfff69b1f",
+        "ggml/src/ggml-cuda/mmvq.cu": "38bfd889e896909a0654aab379bbb8946e8f051e1cc51d2c637c82cda301fd7c",
+        "ggml/src/ggml-cuda/q8canon.cu": "83c4c2d1bc30b9583a2b3b87168a39c4080f962643f6b4f3a2cd85526fd5df11",
+        "ggml/src/ggml-cuda/q8canon.cuh": "07b49813c6221cb10021cd722e0739f364a8f6705eff6b6f9000eb24e563ed3d",
+        "ggml/src/ggml-cuda/q8seq.cu": "29eb2a35ee5f6370b3456ec9b0795d1502df87757161a59945a7295237c50ed6",
+        "ggml/src/ggml-cuda/q8seq.cuh": "c4e438482e3f91052493b8210b1a092329ad9adf270379247f5d2a93e3a11654",
+        "ggml/src/ggml-cuda/rope.cu": "89d2bb30370961a9a16efe2eefa21b7bc7402de5fdf5409218399c20deee3a35"
+      }
+    },
+    {
+      "name": "after-0005-complete-mass-stream",
+      "files": {
+        "ggml/src/ggml-cuda/fattn-common.cuh": "b4c29139fdf41331109f9a8e99f1d880bccc0710d7b5830f3015012f2977151b",
+        "ggml/src/ggml-cuda/fattn-tile.cuh": "3ff5876449ed1a439364384ad486b7aa83c557064d28f94b49ada49d01267240",
+        "ggml/src/ggml-cuda/fattn.cu": "4020d298077e6ed81b2f3c369e81f7ea2d95ab259f72470e0cbce507114a996f",
+        "ggml/src/ggml-cuda/gated_delta_net.cu": "edc1d19331b3ae631051e150ad6e72e2d10859a12a8919f9090a9f38a8054141",
+        "ggml/src/ggml-cuda/gated_delta_net.cuh": "9f9fe193bc79d56ef75d602b151a4637cfb7117288cd3490d55654d5ab881c1e",
+        "ggml/src/ggml-cuda/ggml-cuda.cu": "6549a51ac62f43163c3284aa88c7c9d68067ed9bfba66dafe6bea621e2ba785a",
+        "ggml/src/ggml-cuda/mmq.cu": "3b15c7d79e924b34117193b75add652c38cc1bedf05c2829ce97aa6cfff69b1f",
+        "ggml/src/ggml-cuda/mmvq.cu": "38bfd889e896909a0654aab379bbb8946e8f051e1cc51d2c637c82cda301fd7c",
+        "ggml/src/ggml-cuda/q8canon.cu": "83c4c2d1bc30b9583a2b3b87168a39c4080f962643f6b4f3a2cd85526fd5df11",
+        "ggml/src/ggml-cuda/q8canon.cuh": "07b49813c6221cb10021cd722e0739f364a8f6705eff6b6f9000eb24e563ed3d",
+        "ggml/src/ggml-cuda/q8seq.cu": "b19d7e0aec7ea23aebab01327ecd810a0da0e93d64034a4abdab2a15b078feaf",
+        "ggml/src/ggml-cuda/q8seq.cuh": "c4e438482e3f91052493b8210b1a092329ad9adf270379247f5d2a93e3a11654",
+        "ggml/src/ggml-cuda/rope.cu": "89d2bb30370961a9a16efe2eefa21b7bc7402de5fdf5409218399c20deee3a35"
+      }
+    }
+  ]
+}

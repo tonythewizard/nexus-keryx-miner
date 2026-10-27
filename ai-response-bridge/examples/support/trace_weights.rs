@@ -102,6 +102,11 @@ impl Index {
     }
 }
 impl WeightIndex for Index {
+    fn root(&self) -> Hash {
+        // Index::open rejects empty trees and validates the sparse checkpoint size.
+        let level = u64::BITS - (self.chunks - 1).leading_zeros();
+        self.node(level, 0).expect("cannot read the weight tree root checkpoint")
+    }
     fn n_chunks(&self) -> u64 { self.chunks }
     fn read_chunk_bytes(&self, chunk: u64) -> Option<Hash> {
         let t = self.tensors.iter().find(|t| chunk >= t.base && chunk - t.base < t.bytes / 32)?;

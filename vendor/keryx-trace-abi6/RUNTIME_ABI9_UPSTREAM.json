@@ -1,0 +1,18 @@
+{
+  "repository": "https://github.com/Keryx-Labs/keryx-miner",
+  "commit": "c21c873726049195a3a40af6f19a013fc44ebd82",
+  "application_abi": 9,
+  "installed_stock_library_replaced": false,
+  "host_adapter_abi9_enabled": true,
+  "wrapper_source": "tools/keryx-llama/keryx_llama.cpp",
+  "files": {
+    "tools/keryx-llama/abi9/keryx_llama.cpp": "7b870ed15b8b983d814c41ac724133db24d82550afe338c433154e2ec586e8b7",
+    "tools/keryx-llama/patches/0001-canonical-trace.patch": "3799b9dd13f7d462c28529c8a11aef65ab1792fefcf34977d1904c5e6da66d1b",
+    "tools/keryx-llama/patches/0002-sequence-leaves.patch": "ced1056558237d20050224c843f8e4008f833f759890b164e28e726f71017718",
+    "tools/keryx-llama/patches/0003-fattn-tile-f32.patch": "b5a8f5ff9951972be10e1d4971f9507a0640e85333bb2b1ab3694b86250f72b7",
+    "tools/keryx-llama/patches/0004-rope-f64-angle.patch": "b15e92b242adc94fb1076932c284414906140fc6bbd7866e0c09fce95739eb4c",
+    "tools/keryx-llama/patches/0005-attn-lse-capture.patch": "4e4f99e79d9da5cd29af1ed018434d18befe93b19f6932980aa5d6a3a20bb913"
+  },
+  "build_manifest": "tools/runtime/abi9-patches.json",
+  "previous_commit": "43b0d4391dac20b21681cbbd2e9b443227315211"
+}

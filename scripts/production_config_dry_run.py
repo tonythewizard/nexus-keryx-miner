@@ -11,7 +11,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 root = pathlib.Path(sys.argv[1])
 capture = sys.argv[2]
 options = sys.argv[3:]
-launcher = pathlib.Path(os.environ.get("NEXUS_DATA_DIR", str(pathlib.Path.home() / ".local/share/nexus-keryx-miner"))) / "legacy/bin/keryx-miner-production.fish".read_text()
+launcher = (pathlib.Path(os.environ.get("NEXUS_DATA_DIR", str(pathlib.Path.home() / ".local/share/nexus-keryx-miner"))) / "legacy/bin/keryx-miner-production.fish").read_text()
 payout = re.search(r'--mining-address\s+(\S+)', launcher).group(1)
 certificate = re.search(r'set -l CERT ([0-9a-fA-F]{128})', launcher).group(1)
 key_path = pathlib.Path(os.environ.get("NEXUS_DATA_DIR", str(pathlib.Path.home() / ".local/share/nexus-keryx-miner"))) / "legacy/state/escrow.key"

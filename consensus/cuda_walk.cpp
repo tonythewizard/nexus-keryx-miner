@@ -1,4 +1,5 @@
 #include "keryx/nexus/developer_config.hpp"
+#include "keryx/nexus/gpu_device_policy.hpp"
 #include "keryx/nexus/consensus/cuda_engine.hpp"
 #include <cuda.h>
 #include <cstring>
@@ -192,10 +193,7 @@ struct CudaWalkEngine::Impl {
     });
     if (found == devices.end())
       throw std::runtime_error("requested CUDA GPU UUID is not visible: " + required_uuid);
-    if (found->name != "NVIDIA GeForce primary NVIDIA GPU" ||
-        found->major != 8 || found->minor != 6)
-      throw std::runtime_error("CUDA PoM baseline requires SM 8.6; selected device is " +
-          found->name + " SM " + std::to_string(found->major) + "." + std::to_string(found->minor));
+    require_cuda_model(found->name,found->major,found->minor,std::getenv("NEXUS_PRIMARY_GPU_NAME"));
     CUdevice selected{};
     check(cuDeviceGet(&selected, found->ordinal), "cuDeviceGet selected GPU");
     context.retain(selected);

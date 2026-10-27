@@ -4,11 +4,13 @@
 
 Nexus brings Keryx mining, AI service status, wallet authorization, escrow monitoring and GPU telemetry into a single Linux desktop application. The mining engine is primarily C++20 with CUDA support; Rust components handle independent verification and signing-related work, while Python provides local control and presentation services. The desktop is built with Tauri.
 
-> **Project status — 0.0.3 beta.** Linux x86-64 remains the development baseline. A **native Windows x64 CUDA CLI preview** is developed and tested on GitHub Actions; GPU execution on Windows is not yet validated. H15 support remains incomplete. Models, Merkle trees, keys and private installation state are external inputs.
+> **Project status — 0.0.4 beta.** Linux x86-64 remains the development baseline. A **native Windows x64 CUDA CLI preview** is developed and tested on GitHub Actions; GPU execution on Windows is not yet validated. Native H15 tier-0 CUDA paths have local GPU/mock validation; live H15 chain acceptance remains unvalidated. Models, Merkle trees, keys and private installation state are external inputs.
 
 ![Nexus desktop overview](docs/screenshots/hero-overview.png)
 
 *The screenshots below are from a local development installation. Wallet identifiers, key paths, key identifiers, balances and identifying session details have been obscured. Values visible in the screenshots are illustrative observations from that installation, not reproducible benchmarks or claims of general hardware support.*
+
+See the [0.0.4 release notes](docs/release-0.0.4.md) for the upstream protocol refresh, ABI9 runtime, recovery fixes and complete-session SUBMIT/ERROR logs.
 
 ## What Nexus does
 
@@ -36,9 +38,10 @@ Only a completed packaging job produces a downloadable binary archive.
 
 See **[Native Windows setup and builds](docs/windows.md)** for prerequisites,
 package verification, private configuration and the exact validation limits.
-The preview is experimental and does **not** establish post-H15 compatibility
-or replace SUPR 0.15.0's validated mining support. No GPU benchmark or chain
-acceptance result is implied by compilation and CPU tests.
+The CLI archives remain experimental. Native H15 tier-0 CUDA paths have local
+GPU/mock validation; live H15 chain acceptance and Windows GPU execution remain
+unvalidated. Compilation and CPU tests do not certify GPU execution of the
+exact downloadable archives.
 
 ## Desktop walkthrough
 

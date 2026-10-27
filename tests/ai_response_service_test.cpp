@@ -1,3 +1,4 @@
+#include "keryx/nexus/protocol_rules.hpp"
 #include "keryx/nexus/ai_response_service.hpp"
 #include "keryx/nexus/consensus/cuda_engine.hpp"
 #include "keryx/nexus/consensus/cuda_resident.hpp"
@@ -541,12 +542,60 @@ public:
 };
 #endif
 
+void journal_recovery_regressions(const fs::path &dir) {
+ const auto file=dir/"atomic-recovery.journal";
+ fs::remove(file);
+ ResponseJournal journal(file);
+ const std::string id(64,'b'),txid(64,'d');
+ require(journal.begin(id),"journal fixture did not begin");
+ for(auto state:{ResponseState::Assigned,ResponseState::RequestValidated,ResponseState::Inferencing,
+                 ResponseState::ResponsePrepared,ResponseState::ResponsePublished,ResponseState::TransactionPrepared})
+  require(journal.transition(id,state),"journal fixture transition failed");
+ require(journal.transition(id,ResponseState::Submitting,txid),"submitting fixture failed");
+ require(journal.transition(id,ResponseState::UnknownAfterTimeout),"ambiguous fixture failed");
+ const auto read=[](const fs::path &path){std::ifstream in(path,std::ios::binary);return std::string(std::istreambuf_iterator<char>(in),{});};
+ const auto original=read(file);
+ const auto corrupted=original.substr(0,original.find('\n')+1)+"broken journal tail\n";
+ {std::ofstream out(file,std::ios::binary|std::ios::trunc);out<<corrupted;}
+ bool failed=false;try{journal.recover();}catch(const std::exception&){failed=true;}
+ require(failed,"corrupt recovery must fail");
+ auto saved=journal.get(id);
+ require(saved&&saved->state==ResponseState::UnknownAfterTimeout&&saved->transaction_id==txid,
+         "failed recovery discarded the previous ambiguous receipt");
+ require(read(file)==corrupted,"failed recovery rewrote the original journal");
+ {std::ofstream out(file,std::ios::binary|std::ios::trunc);out<<original;}
+ journal.recover();
+ const auto backup=dir/"atomic-recovery.saved";fs::rename(file,backup);fs::create_directory(file);
+ failed=false;try{journal.recover();}catch(const std::exception&){failed=true;}
+ require(failed,"existing unreadable journal must not look like an empty journal");
+ saved=journal.get(id);require(saved&&saved->state==ResponseState::UnknownAfterTimeout&&saved->transaction_id==txid,
+                            "failed journal read altered the last valid receipt");
+ fs::remove(file);fs::rename(backup,file);
+ const auto before_rebind=read(file);
+ failed=false;try{journal.transition(id,ResponseState::ChainObserved,std::string(64,'e'));}catch(const std::exception&){failed=true;}
+ require(failed,"an existing response transaction identity was replaced");
+ require(read(file)==before_rebind&&journal.get(id)->transaction_id==txid,"rejected identity replacement mutated the journal");
+ require(journal.transition(id,ResponseState::ChainObserved,txid),"matching canonical transaction must remain admissible");
+ require(journal.begin(std::string(64,'a')),"second lookup fixture did not begin");
+ const std::string padded="xx"+id+"suffix";
+ require(journal.get(std::string_view(padded).substr(2,id.size())).has_value(),"non-NUL-terminated ID lookup failed");
+ require(!journal.get(std::string_view(padded).substr(2,id.size()-1)),"ID prefix matched a full hash");
+ std::string embedded=id;embedded[31]='\0';require(!journal.get(embedded),"embedded NUL matched a hash");
+ const auto invalid_file=dir/"invalid-request-id.journal";fs::remove(invalid_file);ResponseJournal invalid(invalid_file);
+ for(const std::string bad:{std::string{},std::string("short"),std::string(64,'A'),std::string(63,'b')}){
+  failed=false;try{invalid.begin(bad);}catch(const std::invalid_argument&){failed=true;}
+  require(failed&&!fs::exists(invalid_file),"invalid request ID created an unrecoverable journal record");
+ }
+ ResponseJournal absent(dir/"missing-journal");absent.recover();require(absent.snapshot().empty(),"missing fresh journal is not empty");
+ std::cout<<"RESPONSE_JOURNAL_RECOVERY=PASS atomic_cache=true corrupt_file_preserved=true read_error_fail_closed=true immutable_txid=true exact_view_lookup=true invalid_id_no_write=true\n";
+}
+
 }
 
 int main(int argc,char **argv){
  if(argc<4){std::cerr<<"usage: nexus-ai-response-service-test PUBLIC_FIXTURE PRIVATE_FIXTURE JOURNAL_DIR [--real-inference GGUF LLAMA_LIBRARY] [--ipfs-api URL] [--pom-cuda TREE META TRACE CONTEXT ORACLE OUTPUT_DIR]\n";return 2;}
  try{
-  fs::path dir=argv[3];fs::create_directories(dir);SubmitMock service;grpc::ServerBuilder builder;int port=0;builder.AddListeningPort("127.0.0.1:0",grpc::InsecureServerCredentials(),&port);builder.RegisterService(&service);auto server=builder.BuildAndStart();if(!server||!port)throw std::runtime_error("mock SubmitTransaction server failed");
+  fs::path dir=argv[3];fs::create_directories(dir);journal_recovery_regressions(dir);SubmitMock service;grpc::ServerBuilder builder;int port=0;builder.AddListeningPort("127.0.0.1:0",grpc::InsecureServerCredentials(),&port);builder.RegisterService(&service);auto server=builder.BuildAndStart();if(!server||!port)throw std::runtime_error("mock SubmitTransaction server failed");
   const std::string endpoint="grpc://127.0.0.1:"+std::to_string(port);
   const auto public_f=fixture(argv[1]);const auto private_f=fixture(argv[2]);
   require(stock_verify_escrow_delegation(payout,public_f.escrow,public_f.cert),"official escrow delegation rejected");
@@ -651,6 +700,54 @@ int main(int argc,char **argv){
     } catch(const std::exception &e){std::cerr<<"REAL_INFERENCE_ERROR type=exception detail="<<e.what()<<"\n"<<std::flush;throw;}
     return last_answer;};
   {
+   // Exercise the Rust network matrix through the actual C++ ABI without a GPU.
+   using keryx::nexus::protocol::flags;
+   using keryx::nexus::protocol::require_legacy_worker_era;
+   require(flags("mainnet",140'114'999)==0 && flags("mainnet",140'115'000)==3,
+           "mainnet H15 boundary differs from pinned official rules");
+   require(flags("testnet",3499)==0 && flags("testnet",3500)==3,
+           "testnet attention gate must be distinct from disabled block tasks");
+   require(flags("mainnet",UINT64_MAX)==3 && flags("testnet",UINT64_MAX)==3,
+           "H15 attention must stay active and block tasks disabled at sentinel DAA");
+   bool refused=false;try{require_legacy_worker_era("mainnet",140'115'000);}catch(const std::runtime_error&){refused=true;}
+   require(refused,"legacy worker admitted the H15 era");
+   refused=false;try{(void)flags("unknown",0);}catch(const std::invalid_argument&){refused=true;}
+   require(refused,"unknown network was silently treated as mainnet");
+   for(bool crossing:{false,true}) {
+    auto c=config_for(private_f,dir/(crossing?"h15-crossing.journal":"h15-refusal.journal"));
+    AiResponseService svc(c);svc.recover();
+    unsigned inference_calls=0,publish_calls=0,submit_calls=0;bool crossed=false;
+    auto effects=effects_for(endpoint,[](auto,auto){return std::string("unused");},service,ipfs_api);
+    effects.infer=[&](auto,auto){++inference_calls;crossed=true;return std::string("answer");};
+    effects.current_daa=[&]{return crossing&&!crossed?140'114'999ULL:140'115'000ULL;};
+    effects.publish_and_readback=[&](auto){++publish_calls;return std::array<std::uint8_t,34>{};};
+    effects.submit=[&](auto,auto){++submit_calls;return AiResponseEffects::SubmitResult{};};
+    const auto daa=crossing?140'114'999ULL:140'115'000ULL;
+    require(svc.serve(private_f.tx,daa,{},effects)==ServeResult::Failed,"unsupported H15 request was not refused");
+    require(inference_calls==(crossing?1U:0U)&&publish_calls==0&&submit_calls==0,
+            "H15 admission allowed inference or publication beyond its boundary");
+   }
+  }
+  {
+   for(bool retry_crossing:{false,true}) {
+    auto c=config_for(private_f,dir/(retry_crossing?"h15-retry-crossing.journal":"h15-sign-crossing.journal"));
+    AiResponseService svc(c);svc.recover();bool crossed=false;unsigned submits=0;
+    auto effects=effects_for(endpoint,[](auto,auto){return std::string("answer");},service,ipfs_api);
+    effects.current_daa=[&]{return crossed?140'115'000ULL:140'114'999ULL;};
+    effects.phase_timing=[&](std::string_view phase,auto){if(!retry_crossing&&phase=="transaction_build")crossed=true;};
+    auto req=parse_request(private_f.tx,140'114'999,nullptr,"mainnet");require(req.has_value(),"H15 retry fixture invalid");
+    const auto pending="the AiResponse for request "+hex(req->request_hash)+
+      " carries an inline body, but that is not a pending private request naming this responder";
+    effects.submit=[&](auto,auto){++submits;return AiResponseEffects::SubmitResult{AiResponseEffects::SubmitResult::State::Rejected,pending};};
+    effects.wait_before_retry=[&](auto){crossed=true;return true;};
+    require(svc.serve(private_f.tx,140'114'999,{},effects)==ServeResult::Failed,"H15 crossing during signing/retry was admitted");
+    require(submits==(retry_crossing?1U:0U),"H15 crossing sent or retried an incompatible response");
+    const auto stored=svc.journal().get(req->stable_id);
+    require(stored&&stored->state==ResponseState::Failed,"H15 crossing lost its failed journal state");
+    if(retry_crossing)require(!stored->transaction_id.empty(),"H15 retry crossing lost its original transaction identity");
+   }
+  }
+  {
    AiResponseService svc(config_for(public_f,dir/"public.journal"));svc.recover();auto effects=effects_for(endpoint,infer,service,ipfs_api);
    if(pom)discover_via_live_grpc(service,endpoint,svc,public_f.tx,mainnet_private_inference_gate_daa-1);
    else require(svc.discover(public_f.tx,mainnet_private_inference_gate_daa-1),"public request was not durably discovered");
@@ -707,7 +804,7 @@ int main(int argc,char **argv){
    require(service.wait_count(3),"SubmitTransaction mock did not receive private AiResponse");
    auto request_bytes=unhex(private_f.tx.payload());std::string why;auto parsed=parse_request(private_f.tx,mainnet_private_inference_gate_daa+100,&why,"mainnet");require(parsed.has_value(),"private request parse failed");
    auto response=unhex(service.last().payload());std::vector<std::uint8_t> opened;
-   require(stock_verify_response(response,parsed->request_hash,private_f.escrow,private_f.root,&opened),"independent Rust signature/private response verification failed");
+   require(stock_verify_response(response,parsed->request_hash,private_f.escrow,private_f.requester_secret,&opened),"independent Rust signature/private response verification failed");
    require(std::string(opened.begin(),opened.end())==last_answer,"private answer does not open to inference result");
    require(!stock_verify_response(response,parsed->request_hash,private_f.escrow,std::nullopt),
            "full private response verification must still require the requester root");
@@ -866,7 +963,7 @@ int main(int argc,char **argv){
     require(svc.serve(fixture.tx,daa,providers_for(fixture),effects)==ServeResult::Submitted,"bounded UTF-8 answer was not submitted to mock");
     std::vector<std::uint8_t> opened;
     require(stock_verify_response(unhex(service.last().payload()),parsed->request_hash,fixture.escrow,
-      private_request?std::optional(fixture.root):std::nullopt,private_request?&opened:nullptr),"bounded answer signature or private sealing invalid");
+      private_request?std::optional(fixture.requester_secret):std::nullopt,private_request?&opened:nullptr),"bounded answer signature or private sealing invalid");
     const auto &body = private_request ? opened : published;
     require(std::string(body.begin(),body.end())==expected,"answer cap split UTF-8 or published/signed a different body");
     std::cout<<"OFFICIAL_ANSWER_BYTE_CAP=PASS private="<<private_request<<" utf8_boundary=true signature=true mainnet_tx=false\n";
@@ -942,6 +1039,46 @@ int main(int argc,char **argv){
    require(transport.submit(tx,id).state==AiResponseEffects::SubmitResult::State::Acknowledged,"pooled transport did not recover from rejection");
    require(service.count()==before+3&&service.peers()==peers,"pooled transport reconnected or retried a request");
    std::cout<<"AI_POOLED_TRANSPORT=PASS ack_reject_ack=true same_peer=true automatic_retry=false mainnet_tx=false\n";
+  }
+  {
+   constexpr std::uint64_t daa=140'115'000;
+   for(const bool persist_ok:{true,false}){
+    auto config=config_for(private_f,dir/(persist_ok?"h15-native.journal":"h15-persist-error.journal"));config.native_h15=true;
+    AiResponseService svc(config);svc.recover();auto effects=effects_for(endpoint,infer,service,ipfs_api);
+    unsigned traced_calls=0,persist_calls=0;bool stored=false;const auto before=service.count();
+    const std::vector<std::uint8_t> packed{'t','o','k','e','n','s',0,'a','n','s','w','e','r'};
+    effects.infer_traced=[&](std::string_view,std::uint32_t,const std::array<std::uint8_t,32>&){
+      ++traced_calls;AiTracedAnswer result;result.answer="native answer";result.sealed_plaintext=packed;result.commitment.fill(6);
+      for(unsigned i=0;i<4;++i){result.commitment[32+i]=std::uint8_t(8U>>(8*i));result.commitment[36+i]=std::uint8_t(12U>>(8*i));}result.commitment[40]=2;return result;
+    };
+    effects.persist_trace=[&](std::string_view id,std::span<const std::uint8_t>body,std::uint64_t at,std::uint64_t expiry){
+      ++persist_calls;require(at==daa&&expiry==daa+500&&service.count()==before,"H15 response sent before trace persistence");
+      require(stock_response_trace_v2(body).has_value(),"H15 trace extension missing before persistence");
+      require(id.size()==64,"H15 persisted response identity missing");if(!persist_ok)throw std::runtime_error("injected trace fsync error");stored=true;
+    };
+    const auto submit=effects.submit;effects.submit=[&](const protowire::RpcTransaction&tx,std::string_view id){require(stored,"H15 network effect precedes durable trace");return submit(tx,id);};
+    const auto result=svc.serve(private_f.tx,daa,providers_for(private_f),effects,daa+500,daa);
+    require(traced_calls==1&&persist_calls==1,"H15 native path was not wired");
+    if(persist_ok){
+      require(result==ServeResult::Submitted&&service.count()==before+1,"H15 response not submitted after persistence");
+      auto parsed=parse_request(private_f.tx,daa);std::vector<std::uint8_t> opened;
+      require(parsed&&stock_verify_response(unhex(service.last().payload()),parsed->request_hash,private_f.escrow,private_f.requester_secret,&opened)&&opened==packed,
+        "H15 private response failed token-plaintext/signature binding");
+      require(svc.serve(private_f.tx,daa,providers_for(private_f),effects,daa+500,daa)==ServeResult::Duplicate&&traced_calls==1,"H15 reconnect regenerated an acknowledged answer");
+      const auto saved_id=svc.journal().get(parsed->stable_id)->transaction_id;
+      for(const bool known:{false,true}){
+       auto recovered_config=config_for(private_f,dir/(known?"h15-recovered-known.journal":"h15-recovered-unknown.journal"));recovered_config.native_h15=true;
+       AiResponseService recovered(recovered_config);recovered.recover();auto recovered_effects=effects;
+       recovered_effects.recover_traced=[&](const std::array<std::uint8_t,32>&request)->std::optional<std::string>{require(request==parsed->request_hash,"H15 recovery request binding changed");return saved_id;};
+       recovered_effects.reconcile=[&](std::string_view id){require(id==saved_id,"H15 recovery changed signed txid");return known;};
+       require(recovered.serve(private_f.tx,daa,providers_for(private_f),recovered_effects,daa+500,daa)==(known?ServeResult::Duplicate:ServeResult::WaitingReconciliation),"H15 durable response recovery failed");
+       require(traced_calls==1&&persist_calls==1&&service.count()==before+1,"H15 recovery regenerated or resent outside durable scheduler");
+       require(recovered.journal().get(parsed->stable_id)->transaction_id==saved_id,"H15 recovery lost response identity");
+      }
+
+    }else require(result==ServeResult::Failed&&service.count()==before,"H15 persistence failure reached SubmitTransaction");
+   }
+   std::cout<<"H15_NATIVE_SERVICE=PASS durable_before_submit=true private_tokens=SEALED fsync_failure=NO_SEND duplicate=NO_REGENERATION signed_response_recovery=PASS\n";
   }
   server->Shutdown();
   if(pom)pom->stop();

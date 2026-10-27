@@ -20,3 +20,35 @@ def assert_no_gpu_miner(proc_root=Path('/proc')):
             # Processes can exit during this read-only snapshot. Kernel-owned
             # processes may also restrict their executable links.
             continue
+
+
+def assert_only_display_contexts(process_lines, proc_root=Path('/proc')):
+    """Admit only the verified system KDE display context from an NVML PID/name query.
+
+    KWin may be non-dumpable, denying /proc/exe even to its owner. In that case
+    require NVML's exact executable path plus matching proc owner and comm.
+    Missing/raced identities and every other compute client remain refusals.
+    """
+    for value in process_lines.splitlines():
+        if not value.strip():
+            continue
+        fields = [part.strip() for part in value.split(',')]
+        if len(fields) != 2:
+            raise RuntimeError('unrecognized CUDA compute process identity')
+        pid, reported_path = fields
+        if not pid.isascii() or not pid.isdigit() or int(pid) <= 0:
+            raise RuntimeError('unrecognized CUDA compute process identity')
+        if reported_path != '/usr/bin/kwin_wayland':
+            raise RuntimeError('another CUDA compute process is using the allocated GPU')
+        process = proc_root / pid
+        try:
+            if process.stat().st_uid != os.getuid() or (process / 'comm').read_text().strip() != 'kwin_wayland':
+                raise RuntimeError('CUDA display process owner/name mismatch')
+            try:
+                executable = os.readlink(process / 'exe')
+            except PermissionError:
+                executable = reported_path  # trusted NVML query, corroborated above
+        except OSError as error:
+            raise RuntimeError('CUDA compute process identity cannot be verified') from error
+        if executable != reported_path:
+            raise RuntimeError('CUDA display executable differs from NVML identity')

@@ -123,7 +123,7 @@ std::string official_qwen35_ai_prompt(std::string_view user_prompt) {
 std::vector<int> qwen35_context_candidates(int configured_context) {
   constexpr int floor = 8192;
   constexpr int cap = 32768;
-  if (configured_context >= 0) return {configured_context};
+  if (configured_context >= 0) return {std::clamp(configured_context, 1, 131072)};
   std::vector<int> candidates;
   for (int context = cap; context > floor; context /= 2) candidates.push_back(context);
   candidates.push_back(floor);
@@ -187,6 +187,7 @@ struct StockLlamaRuntime::Impl {
   FreeFn free_model{};
   std::string gguf;
   int abi{};
+  std::uint32_t context_capacity{};
   detail::TraceApi trace_api{};
   std::unique_ptr<detail::TraceCapture> trace;
   mutable std::mutex mutex;
@@ -204,6 +205,15 @@ StockLlamaRuntime::StockLlamaRuntime(std::string library_path, std::string gguf_
   if (sha256_file(gguf_path) != official_model_sha256)
     throw std::runtime_error("OPoI GGUF SHA-256 does not match the configured official model");
   impl_->gguf = std::move(gguf_path);
+  static std::once_flag canonical_environment;
+  std::call_once(canonical_environment, [] {
+#ifdef _WIN32
+    if (_putenv_s("GGML_CUDA_DISABLE_GRAPHS","1") || _putenv_s("LLAMA_ATTN_ROT_DISABLE","1"))
+#else
+    if (setenv("GGML_CUDA_DISABLE_GRAPHS","1",1) || setenv("LLAMA_ATTN_ROT_DISABLE","1",1))
+#endif
+      throw std::runtime_error("Cannot set canonical inference environment");
+  });
   impl_->library = platform::open_library(std::filesystem::u8path(library_path));
   if (!impl_->library) throw std::runtime_error(std::string("cannot load stock libkeryx-llama: ") + "native loader error");
   const auto abi = symbol<AbiFn>(impl_->library, "keryx_llama_abi");
@@ -212,9 +222,9 @@ StockLlamaRuntime::StockLlamaRuntime(std::string library_path, std::string gguf_
   impl_->free_model = symbol<FreeFn>(impl_->library, "keryx_llama_free");
   impl_->last_error = symbol<ErrorFn>(impl_->library, "keryx_llama_last_error");
   impl_->abi = abi();
-  if (impl_->abi != 3 && impl_->abi != 6 && impl_->abi != 8)
-    throw std::runtime_error("stock libkeryx-llama ABI mismatch (expected 3, 6 or 8)");
-  if (impl_->abi == 6 || impl_->abi == 8) {
+  if (impl_->abi != 3 && impl_->abi != 6 && impl_->abi != 8 && impl_->abi != 9)
+    throw std::runtime_error("stock libkeryx-llama ABI mismatch (expected 3, 6, 8 or 9)");
+  if (impl_->abi == 6 || impl_->abi == 8 || impl_->abi == 9) {
     auto &api = impl_->trace_api;
     api.configure = symbol<decltype(api.configure)>(impl_->library, "keryx_llama_trace_configure");
     api.leaf_count = symbol<decltype(api.leaf_count)>(impl_->library, "keryx_llama_trace_leaf_count");
@@ -223,7 +233,12 @@ StockLlamaRuntime::StockLlamaRuntime(std::string library_path, std::string gguf_
     api.replay = symbol<decltype(api.replay)>(impl_->library, "keryx_llama_replay");
     api.error = impl_->last_error;
     api.abi = impl_->abi;
-    if (impl_->abi == 8) {
+    if (impl_->abi == 9) {
+      api.seq_configure = symbol<decltype(api.seq_configure)>(impl_->library,"keryx_llama_seq_configure");
+      api.seq_roots = symbol<decltype(api.seq_roots)>(impl_->library,"keryx_llama_seq_roots");
+      api.seq_replay = symbol<decltype(api.seq_replay)>(impl_->library,"keryx_llama_seq_replay");
+    }
+    if (impl_->abi == 8 || impl_->abi == 9) {
       api.trace_tokens = symbol<decltype(api.trace_tokens)>(impl_->library,"keryx_llama_trace_tokens");
       api.replay_multi = symbol<decltype(api.replay_multi)>(impl_->library,"keryx_llama_replay_multi");
       api.context_acquire = symbol<decltype(api.context_acquire)>(impl_->library,"keryx_llama_context_acquire");
@@ -235,16 +250,17 @@ StockLlamaRuntime::StockLlamaRuntime(std::string library_path, std::string gguf_
   if (const char *raw = std::getenv("KERYX_LLAMA_CTX")) {
     char *parse_end = nullptr;
     const long parsed = std::strtol(raw, &parse_end, 10);
-    if (parse_end != raw && *parse_end == '\0' && parsed >= 0 && parsed <= std::numeric_limits<int>::max())
-      configured_context = static_cast<int>(parsed);
+    if (parse_end != raw && *parse_end == '\0' && parsed >= std::numeric_limits<int>::min() && parsed <= std::numeric_limits<int>::max())
+      configured_context = std::clamp(static_cast<int>(parsed), 1, 131072);
   }
   std::string last_message;
   for (const int context : qwen35_context_candidates(configured_context)) {
-    if ((impl_->abi == 6 || impl_->abi == 8) && context > 32768)
+    if ((impl_->abi == 6 || impl_->abi == 8 || impl_->abi == 9) && context > 32768)
       throw std::runtime_error("ABI6 context exceeds bounded capture adapter limit");
     impl_->model = load(impl_->gguf.c_str(), 0, context);
     if (impl_->model) {
-      if (impl_->abi == 6 || impl_->abi == 8)
+      impl_->context_capacity=context>0?static_cast<std::uint32_t>(context):4096U;
+      if (impl_->abi == 6 || impl_->abi == 8 || impl_->abi == 9)
         impl_->trace = std::make_unique<detail::TraceCapture>(impl_->trace_api, impl_->model,
             context > 0 ? static_cast<std::uint32_t>(context) : 4096U,
             context > 8192 ? 8192U : 0U);
@@ -303,11 +319,22 @@ std::string StockLlamaRuntime::infer(std::string_view prompt, std::uint32_t max_
   return std::string(output.data(), static_cast<std::size_t>(length));
 }
 
+std::uint32_t StockLlamaRuntime::configure_sequence(std::span<const SequenceLayer> layers,
+    std::uint32_t n_attn,std::uint32_t n_recur,std::uint32_t heads,std::uint32_t interval) {
+  if(!impl_ || !impl_->trace || impl_->abi!=9)throw std::runtime_error("Sequence trace requires ABI9");
+  const std::lock_guard lock(impl_->mutex);
+  return impl_->trace->configure_sequence(layers,n_attn,n_recur,heads,interval);
+}
+std::vector<SequenceCapture> StockLlamaRuntime::replay_sequence(const TracedGeneration &capture,
+    std::span<const SequenceSpan> spans,std::uint32_t max_chunks) {
+  if(!impl_ || !impl_->trace || impl_->abi!=9)throw std::runtime_error("Sequence replay requires ABI9");
+  const std::lock_guard lock(impl_->mutex);return impl_->trace->replay_sequence(capture,spans,max_chunks);
+}
 int StockLlamaRuntime::abi_version() const noexcept { return impl_ ? impl_->abi : 0; }
 
 void StockLlamaRuntime::use_task_context() {
-  if(!impl_ || !impl_->trace || impl_->abi!=8)
-    throw std::runtime_error("Task context requires stock llama ABI8");
+  if(!impl_ || !impl_->trace || (impl_->abi!=8 && impl_->abi!=9))
+    throw std::runtime_error("Task context requires stock llama ABI8/9");
   const std::lock_guard lock(impl_->mutex);
   impl_->trace->use_task_context();
 }
@@ -331,12 +358,20 @@ std::pair<std::vector<std::uint8_t>, std::vector<std::uint8_t>> StockLlamaRuntim
 }
 
 TracedGeneration StockLlamaRuntime::trace_tokens(std::span<const std::int32_t> tokens) {
-  if(!impl_ || !impl_->trace || impl_->abi!=8)throw std::runtime_error("Token trace requires stock llama ABI8");
+  if(!impl_ || !impl_->trace || (impl_->abi!=8 && impl_->abi!=9))throw std::runtime_error("Token trace requires stock llama ABI8/9");
   const std::lock_guard lock(impl_->mutex);return impl_->trace->trace_tokens(tokens);
 }
 std::vector<std::vector<std::uint8_t>> StockLlamaRuntime::replay_trace_multi(const TracedGeneration &capture,
     std::span<const std::pair<std::uint32_t,std::uint32_t>> caps,std::uint32_t slot) {
-  if(!impl_ || !impl_->trace || impl_->abi!=8)throw std::runtime_error("Multi replay requires stock llama ABI8");
+  if(!impl_ || !impl_->trace || (impl_->abi!=8 && impl_->abi!=9))throw std::runtime_error("Multi replay requires stock llama ABI8/9");
   const std::lock_guard lock(impl_->mutex);return impl_->trace->replay_multi(capture,caps,slot);
 }
 } // namespace keryx::nexus::opoi
+
+namespace keryx::nexus::opoi {
+std::uint32_t StockLlamaRuntime::trace_context_capacity() const noexcept{return impl_?impl_->context_capacity:0;}
+std::pair<std::string,std::string> official_qwen35_trace_prompt(std::string_view user){
+ if(user.empty()||user.find('\0')!=user.npos)throw std::invalid_argument("Invalid trace prompt");
+ return {"<|im_start|>system\nRequest id:","\n"+std::string(stock_system_prompt)+"<|im_end|>\n<|im_start|>user\n"+std::string(user)+"<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"};
+}
+}

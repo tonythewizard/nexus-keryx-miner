@@ -44,6 +44,16 @@ int main() {
    if(!blocked)throw std::runtime_error("unvalidated production backend admitted");
  }
  require_production_gpu_backend("cuda-driver",uuid.c_str(),uuid);
+ require_cuda_model("Configured CUDA device",8,6,"Configured CUDA device");
+ for(const auto *name:{static_cast<const char*>(nullptr),"","Different CUDA device"}) {
+   bool blocked=false;try{require_cuda_model("Configured CUDA device",8,6,name);}catch(const std::exception&){blocked=true;}
+   if(!blocked)throw std::runtime_error("missing or mismatched local GPU model accepted");
+ }
+ for(const auto [major,minor]:{std::pair{8,5},std::pair{7,6},std::pair{9,0}}) {
+   bool blocked=false;try{require_cuda_model("Configured CUDA device",major,minor,"Configured CUDA device");}catch(const std::exception&){blocked=true;}
+   if(!blocked)throw std::runtime_error("unsupported CUDA architecture accepted");
+ }
+
  for(auto [index,value]:std::vector<std::pair<int,std::string>>{{9,"257"},{10,"0"},{10,"5"},{11,"shadow"},{13,"--no-ai-response"},{14,"--invalid"},{2,"invalid-payout"},{3,"invalid-delegation"}}){auto old=args[index];args[index]=value;reject(uuid.c_str());args[index]=old;}
  args.pop_back();args[11]="shadow";args[12]="--no-submit";args[13]="--no-ai-response";args[9]="1";
  config=parse(uuid.c_str());if(config.policy.enabled()||config.policy.ai_responses_enabled()||config.escrow_claims)throw std::runtime_error("shadow authorization changed");

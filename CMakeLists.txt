@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(nexus_keryx_miner VERSION 0.0.3 LANGUAGES C CXX)
+project(nexus_keryx_miner VERSION 0.0.4 LANGUAGES C CXX)
 set(NEXUS_RECOVERY_ROOT "${CMAKE_BINARY_DIR}/runtime" CACHE PATH "Private persistent runtime/test data")
 set(NEXUS_PRIMARY_GPU_UUID "GPU-00000000-0000-0000-0000-000000000000" CACHE STRING "Explicit NVIDIA UUID; configure locally for GPU execution")
 set(NEXUS_SECONDARY_GPU_ID "pci:0000:00:00.0" CACHE STRING "Explicit secondary PCI identity")
@@ -62,9 +62,60 @@ function(nexus_warnings target)
     target_compile_options(${target} PRIVATE ${ARGN})
   endif()
 endfunction()
+# Keep assertions active and temporary data isolated in all test drivers.
+# This does not change the build mode of production libraries or executables.
+function(nexus_configure_test_drivers)
+  file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test-data/tmp")
+  get_directory_property(local_tests TESTS)
+  if(local_tests)
+    set_property(TEST ${local_tests} APPEND PROPERTY ENVIRONMENT
+      "TMPDIR=${CMAKE_CURRENT_BINARY_DIR}/test-data/tmp"
+      "TMP=${CMAKE_CURRENT_BINARY_DIR}/test-data/tmp"
+      "TEMP=${CMAKE_CURRENT_BINARY_DIR}/test-data/tmp"
+      "PYTHONDONTWRITEBYTECODE=1")
+  endif()
+  get_directory_property(NEXUS_LOCAL_TARGETS BUILDSYSTEM_TARGETS)
+  foreach(target IN LISTS NEXUS_LOCAL_TARGETS)
+    get_target_property(target_type ${target} TYPE)
+    if(NOT target_type STREQUAL "EXECUTABLE")
+      continue()
+    endif()
+    get_target_property(target_sources ${target} SOURCES)
+    foreach(source IN LISTS target_sources)
+      if(source MATCHES "(^|/)tests/.*\\.(cpp|cc|cxx|cu)$")
+        if(MSVC)
+          target_compile_options(${target} PRIVATE /UNDEBUG)
+        else()
+          target_compile_options(${target} PRIVATE -UNDEBUG)
+        endif()
+        break()
+      endif()
+    endforeach()
+  endforeach()
+endfunction()
+
+# These executors are CPU mocks; no graphics API or device is required.
+function(nexus_add_gpu_policy_tests)
+  add_executable(nexus-gpu-work-coordinator-test tests/gpu_work_coordinator_test.cpp)
+  target_link_libraries(nexus-gpu-work-coordinator-test PRIVATE nexus_gpu_work)
+  add_test(NAME dual_gpu_nonce_ownership_and_stale_recovery COMMAND nexus-gpu-work-coordinator-test)
+  set_tests_properties(dual_gpu_nonce_ownership_and_stale_recovery PROPERTIES TIMEOUT 20)
+  if(UNIX AND NOT APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    add_executable(nexus-shared-gpu-job-test tests/shared_gpu_job_test.cpp)
+    target_link_libraries(nexus-shared-gpu-job-test PRIVATE nexus_gpu_work)
+    target_link_options(nexus-shared-gpu-job-test PRIVATE "-Wl,--wrap=_Znwm")
+    add_test(NAME immutable_gpu_job_snapshot_and_allocation_failure COMMAND nexus-shared-gpu-job-test)
+  endif()
+  add_executable(nexus-secondary-work-lane-test tests/secondary_work_lane_test.cpp)
+  target_link_libraries(nexus-secondary-work-lane-test PRIVATE nexus_gpu_work)
+  add_test(NAME secondary_lane_pause_drain_and_shutdown COMMAND nexus-secondary-work-lane-test)
+  set_tests_properties(secondary_lane_pause_drain_and_shutdown PROPERTIES TIMEOUT 20)
+endfunction()
+
 find_package(Threads REQUIRED)
 find_package(OpenSSL REQUIRED COMPONENTS Crypto)
 find_package(Python3 COMPONENTS Interpreter QUIET)
+include(CTest)
 
 if(NEXUS_ENABLE_VULKAN_JIT)
   find_path(NEXUS_VULKAN_INCLUDE vulkan/vulkan_core.h HINTS "${NEXUS_VULKAN_HEADERS}" REQUIRED)
@@ -83,9 +134,6 @@ if(NEXUS_ENABLE_VULKAN_JIT)
   add_executable(nexus-vulkan-real-model-probe experiments/vulkan_jit/real_model_probe.cpp)
   target_link_libraries(nexus-vulkan-real-model-probe PRIVATE nexus_model)
   nexus_warnings(nexus-vulkan-real-model-probe -Wall -Wextra)
-  add_library(nexus_gpu_work src/gpu/gpu_work_coordinator.cpp src/gpu/secondary_work_lane.cpp)
-  target_link_libraries(nexus_gpu_work PUBLIC nexus_consensus)
-  nexus_warnings(nexus_gpu_work -Wall -Wextra -Wpedantic)
   add_library(nexus_vulkan_walk src/gpu/vulkan_walk_engine.cpp src/gpu/vulkan_bda_resident_engine.cpp)
   target_include_directories(nexus_vulkan_walk PRIVATE "${NEXUS_VULKAN_INCLUDE}")
   target_link_libraries(nexus_vulkan_walk PUBLIC nexus_consensus PRIVATE "${NEXUS_VULKAN_LOADER}" OpenSSL::Crypto)
@@ -114,7 +162,7 @@ if(NEXUS_ENABLE_CUDA)
   set(CMAKE_CUDA_ARCHITECTURES 86)
 endif()
 
-add_library(nexus_consensus consensus/pom_v4.cpp)
+add_library(nexus_consensus consensus/pom_v4.cpp consensus/pom_v5.cpp)
 nexus_optimize_pom_host(nexus_consensus)
 target_include_directories(nexus_consensus PUBLIC include ${BLAKE3_INCLUDE_DIR} PRIVATE ${BLAKE2_INCLUDE_DIR})
 target_link_libraries(nexus_consensus PUBLIC ${BLAKE3_LIBRARY} PRIVATE ${BLAKE2_LIBRARY})
@@ -127,8 +175,15 @@ target_link_libraries(nexus_capture PUBLIC ${BLAKE3_LIBRARY} Threads::Threads)
 nexus_warnings(nexus_capture -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 target_link_libraries(nexus_consensus PUBLIC nexus_capture)
 
+# Nonce leases, preemption and secondary-lane policy have no GPU dependency.
+if(NEXUS_ENABLE_VULKAN_JIT OR BUILD_TESTING)
+  add_library(nexus_gpu_work src/gpu/gpu_work_coordinator.cpp src/gpu/secondary_work_lane.cpp)
+  target_link_libraries(nexus_gpu_work PUBLIC nexus_consensus)
+  nexus_warnings(nexus_gpu_work -Wall -Wextra -Wpedantic)
+endif()
+
 if(NEXUS_ENABLE_CUDA)
-  # Compile unchanged device kernels, then embed a portable C++ byte array.
+  # Compile native CUDA kernels, then embed a portable C++ byte array.
   # The resulting host library has no CUDA Runtime dependency of its own.
   set(NEXUS_CUDA_TEMP "${CMAKE_CURRENT_BINARY_DIR}/persistent-tmp")
   file(MAKE_DIRECTORY "${NEXUS_CUDA_TEMP}")
@@ -162,6 +217,13 @@ nexus_optimize_pom_host(nexus_model)
 target_include_directories(nexus_model PUBLIC include ${BLAKE3_INCLUDE_DIR})
 target_link_libraries(nexus_model PUBLIC nexus_consensus OpenSSL::Crypto)
 nexus_warnings(nexus_model -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+add_executable(nexus-pom-v5-test tests/pom_v5_test.cpp)
+target_link_libraries(nexus-pom-v5-test PRIVATE nexus_model)
+add_test(NAME pom_v5_cpu_vectors COMMAND nexus-pom-v5-test --cpu "${CMAKE_BINARY_DIR}/test-data/pom-v5")
+if(NEXUS_ENABLE_CUDA)
+  target_link_libraries(nexus-pom-v5-test PRIVATE nexus_cuda)
+  target_compile_definitions(nexus-pom-v5-test PRIVATE NEXUS_TEST_HAS_CUDA=1)
+endif()
 add_executable(nexus-pom-host-replay tests/pom_host_replay.cpp)
 target_link_libraries(nexus-pom-host-replay PRIVATE nexus_model)
 add_executable(nexus-gguf-inspect src/model/gguf_main.cpp)
@@ -169,6 +231,7 @@ target_link_libraries(nexus-gguf-inspect PRIVATE nexus_model)
 
 if(WIN32 AND NOT NEXUS_ENABLE_GRPC)
   include("${CMAKE_CURRENT_SOURCE_DIR}/tools/cmake/windows-tests.cmake")
+  nexus_configure_test_drivers()
   return()
 endif()
 
@@ -211,6 +274,8 @@ int main() {
     set(NEXUS_AI_BRIDGE_CARGO_HOME "${CMAKE_BINARY_DIR}/cargo-home")
   endif()
   set(NEXUS_PERSISTENT_TMP "${CMAKE_CURRENT_BINARY_DIR}/persistent-tmp")
+  file(GLOB_RECURSE NEXUS_AI_BRIDGE_SOURCES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/ai-response-bridge/src/*.rs")
   file(GLOB NEXUS_VERIFIED_INFERENCE_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/vendor/keryx-verifiable-inference/src/*.rs")
   file(GLOB NEXUS_TRACE_MANIFESTS CONFIGURE_DEPENDS
@@ -224,8 +289,8 @@ int main() {
       "PROTOC=$<TARGET_FILE:protobuf::protoc>"
       "TMPDIR=${NEXUS_PERSISTENT_TMP}" "TMP=${NEXUS_PERSISTENT_TMP}" "TEMP=${NEXUS_PERSISTENT_TMP}"
       ${CARGO_EXECUTABLE} build --release --locked --manifest-path "${CMAKE_CURRENT_SOURCE_DIR}/ai-response-bridge/Cargo.toml"
-    DEPENDS ai-response-bridge/Cargo.toml ai-response-bridge/Cargo.lock
-      ai-response-bridge/src/verified_inference.rs ai-response-bridge/src/trace_producer.rs
+    DEPENDS ai-response-bridge/Cargo.toml ai-response-bridge/Cargo.lock ${NEXUS_AI_BRIDGE_SOURCES}
+      ai-response-bridge/src/protocol_rules.rs ai-response-bridge/src/verified_inference.rs ai-response-bridge/src/trace_producer.rs
       ai-response-bridge/src/trace_store.rs ai-response-bridge/src/trace_recovery.rs
       vendor/keryx-verifiable-inference/Cargo.toml ${NEXUS_VERIFIED_INFERENCE_SOURCES} ${NEXUS_TRACE_MANIFESTS}
       ai-response-bridge/build.rs ai-response-bridge/src/lib.rs ai-response-bridge/src/bin/fixture.rs
@@ -261,11 +326,19 @@ int main() {
   add_library(nexus_grpc src/network/grpc_client.cpp src/network/grpc_header.cpp
     src/network/ai_reorg_reconciliation.cpp
     src/network/submit_block_client.cpp src/network/submission_pipeline.cpp
-    src/network/opoi.cpp src/network/trace_capture.cpp src/network/ai_service.cpp src/network/ai_response_service.cpp
+    src/network/opoi.cpp src/network/trace_capture.cpp src/network/ai_service.cpp src/network/ai_response_service.cpp src/network/h15_audit_client.cpp
     src/network/escrow_watcher.cpp src/network/strike_monitor.cpp)
+  add_executable(nexus-h15-worker-rpc EXCLUDE_FROM_ALL tests/h15_worker_rpc.cpp)
+  target_link_libraries(nexus-h15-worker-rpc PRIVATE nexus_node_proto)
+  add_executable(nexus-h15-native-test EXCLUDE_FROM_ALL tests/h15_native_test.cpp)
+  target_link_libraries(nexus-h15-native-test PRIVATE nexus_grpc)
+  if(NEXUS_ENABLE_CUDA)
+    target_link_libraries(nexus-h15-native-test PRIVATE nexus_cuda)
+    target_compile_definitions(nexus-h15-native-test PRIVATE NEXUS_TEST_HAS_CUDA=1)
+  endif()
   add_dependencies(nexus_grpc nexus_ai_response_bridge_build)
   target_include_directories(nexus_grpc PUBLIC include PRIVATE "${PROTO_GEN}")
-  target_link_libraries(nexus_grpc PUBLIC nexus_capture nexus_node_proto nexus_consensus gRPC::grpc++
+  target_link_libraries(nexus_grpc PUBLIC nexus_capture nexus_node_proto nexus_consensus nexus_model gRPC::grpc++
     OpenSSL::Crypto ${BLAKE2_LIBRARY} ${CMAKE_DL_LIBS} CURL::libcurl ZLIB::ZLIB
     nexus_ai_response_bridge Threads::Threads ${CMAKE_DL_LIBS})
   if(WIN32)
@@ -288,7 +361,6 @@ int main() {
   if(WIN32)
     add_executable(nexus-native-header-parity-test tests/header_parity_test.cpp)
     target_link_libraries(nexus-native-header-parity-test PRIVATE nexus_grpc)
-    target_compile_options(nexus-native-header-parity-test PRIVATE /UNDEBUG)
   endif()
   add_executable(keryx-nexus-live src/network/live_main.cpp)
   target_link_libraries(keryx-nexus-live PRIVATE nexus_grpc)
@@ -476,7 +548,6 @@ int main() {
   endif()
 endif()
 
-include(CTest)
 if(BUILD_TESTING)
   add_executable(nexus-vulkan-bounded-upload-test tests/vulkan_bounded_upload_test.cpp)
   add_test(NAME bounded_native_inference_tensor_upload COMMAND nexus-vulkan-bounded-upload-test)
@@ -498,22 +569,7 @@ if(BUILD_TESTING)
   target_include_directories(nexus-submission-concurrency-test PRIVATE include)
   target_link_libraries(nexus-submission-concurrency-test PRIVATE Threads::Threads)
   add_test(NAME submission_concurrent_deduplication COMMAND nexus-submission-concurrency-test)
-  if(NEXUS_ENABLE_VULKAN_JIT)
-    add_executable(nexus-gpu-work-coordinator-test tests/gpu_work_coordinator_test.cpp)
-    target_link_libraries(nexus-gpu-work-coordinator-test PRIVATE nexus_gpu_work)
-    add_test(NAME dual_gpu_nonce_ownership_and_stale_recovery COMMAND nexus-gpu-work-coordinator-test)
-    set_tests_properties(dual_gpu_nonce_ownership_and_stale_recovery PROPERTIES TIMEOUT 20)
-    if(UNIX AND NOT APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-      add_executable(nexus-shared-gpu-job-test tests/shared_gpu_job_test.cpp)
-      target_link_libraries(nexus-shared-gpu-job-test PRIVATE nexus_gpu_work)
-      target_link_options(nexus-shared-gpu-job-test PRIVATE "-Wl,--wrap=_Znwm")
-      add_test(NAME immutable_gpu_job_snapshot_and_allocation_failure COMMAND nexus-shared-gpu-job-test)
-    endif()
-    add_executable(nexus-secondary-work-lane-test tests/secondary_work_lane_test.cpp)
-    target_link_libraries(nexus-secondary-work-lane-test PRIVATE nexus_gpu_work)
-    add_test(NAME secondary_lane_pause_drain_and_shutdown COMMAND nexus-secondary-work-lane-test)
-    set_tests_properties(secondary_lane_pause_drain_and_shutdown PROPERTIES TIMEOUT 20)
-  endif()
+  nexus_add_gpu_policy_tests()
   file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/test-data")
   if(Python3_Interpreter_FOUND)
     file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/test-data/banked-cpu/tmp")
@@ -598,6 +654,12 @@ if(BUILD_TESTING)
   add_executable(nexus-trace-stage2-adapter-test tests/trace_stage2_adapter_test.cpp src/network/trace_capture.cpp)
   target_include_directories(nexus-trace-stage2-adapter-test PRIVATE include)
   add_test(NAME abi8_trace_capture_bounds_and_single_replay COMMAND nexus-trace-stage2-adapter-test)
+  add_executable(nexus-trace-sequence-adapter-test tests/trace_sequence_adapter_test.cpp src/network/trace_capture.cpp)
+  target_include_directories(nexus-trace-sequence-adapter-test PRIVATE include)
+  add_test(NAME abi9_sequence_capture_bounds_and_replay COMMAND nexus-trace-sequence-adapter-test)
+  add_executable(nexus-trace-manifest-bridge-test tests/trace_manifest_bridge_test.cpp)
+  target_link_libraries(nexus-trace-manifest-bridge-test PRIVATE nexus_grpc)
+  add_test(NAME canonical_trace_manifest_native_bridge COMMAND nexus-trace-manifest-bridge-test)
   # Explicit offline fixture target; never admitted automatically as a CPU test.
   add_executable(nexus-abi6-capture-probe tests/abi6_capture_probe.cpp)
   target_link_libraries(nexus-abi6-capture-probe PRIVATE nexus_grpc)
@@ -752,7 +814,7 @@ if(BUILD_TESTING AND Python3_Interpreter_FOUND)
           "${NEXUS_TEST_LAUNCHER}"
           "${NEXUS_TEST_ESCROW_KEY}")
       set_tests_properties(official_submit_block_mock_protocol PROPERTIES
-        TIMEOUT 900 LABELS "consensus;submit-mock;authentic-gguf")
+        TIMEOUT 900 SKIP_RETURN_CODE 77 LABELS "consensus;submit-mock;authentic-gguf")
     else()
       message(FATAL_ERROR "Authentic-proof SubmitBlock mock requires NEXUS_RUST_ORACLE")
     endif()
@@ -816,3 +878,6 @@ if(BUILD_TESTING)
   target_link_libraries(nexus-platform-file-test PRIVATE nexus_model)
   add_test(NAME native_file_reads COMMAND nexus-platform-file-test "${CMAKE_BINARY_DIR}/test-data/platform-file")
 endif()
+
+
+nexus_configure_test_drivers()

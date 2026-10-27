@@ -3,12 +3,13 @@ import re
 import time
 
 
-def dual_gpu_panels(frame, model, gpu, tab, force=False, preferences=None):
+def dual_gpu_panels(frame, model, gpu, tab, force=False, preferences=None, gpu_metrics=None):
     """Expose device scopes; never relabel NVIDIA-only values as fleet totals."""
     from nexus_gpu_metrics import summary, finite
     import nexus_dashboard as dashboard
-    data = summary(model, gpu)
-    if (not data['dual'] and not force) or tab not in (0, 1): return
+    if tab not in (0, 1): return
+    data = summary(model, gpu) if gpu_metrics is None else gpu_metrics
+    if not data['dual'] and not force: return
     from nexus_gpu_identity import display_devices, secondary_device, display_name
     gpu1,gpu2=display_devices(model.gpu_devices)
     name1,name2=display_name(gpu1),display_name(gpu2)
@@ -357,7 +358,7 @@ class NativeFrame:
 
 
 
-def build_presenter_frame(height, width, model, gpu, tab, log_filter='ALL', preferences=None):
+def build_presenter_frame(height, width, model, gpu, tab, log_filter='ALL', preferences=None, gpu_metrics=None, log_before=None):
     import nexus_dashboard as dashboard
     from nexus_ui_preferences import load, resolved_view, large_gpu_count
     preferences = load() if preferences is None else preferences
@@ -376,10 +377,16 @@ def build_presenter_frame(height, width, model, gpu, tab, log_filter='ALL', pref
         panel = frame.panels[0] if frame.panels else {
             'y': 6, 'x': 1, 'h': max(8, height - 9), 'w': width - 3,
         }
-        events = [item for item in model.events if dashboard.event_matches(item[1], log_filter)]
-        limit = max(1, min(100, height - 11))
+        history = model.log_history.get(log_filter)
+        history_page = None
+        if history is not None:
+            events, history_page = history.page(log_before)
+            history_page['session'] = model.session
+        else:
+            events = [item for item in model.events if dashboard.event_matches(item[1], log_filter)]
+            events = events[-max(1, min(100, height - 11)):]
         rows = []
-        for stamp, event, detail in events[-limit:]:
+        for stamp, event, detail in events:
             upper = event.upper()
             category = ('AI' if any(token in upper for token in ('AI_', 'OPOI', 'INFERENCE')) else
                         'JOB' if any(token in upper for token in ('JOB', 'TEMPLATE', 'STALE')) else
@@ -392,12 +399,13 @@ def build_presenter_frame(height, width, model, gpu, tab, log_filter='ALL', pref
                       'kind': 'event-log', 'rows': [], 'free': {},
                       'table_columns': ['TIME', 'TYPE', 'EVENT', 'DETAIL'],
                       'table_rows': rows, 'h': max(8, height - 9), 'w': width - 3})
+        if history_page is not None: panel['log_history'] = history_page
         frame.panels = [panel]
     effective = resolved_view(preferences, model, gpu)
     if effective == 'rig' and tab in (0, 1):
         rig_panels(frame, model, gpu, tab, preferences)
     elif tab == 1 or (tab == 0 and effective == 'dual'):
-        dual_gpu_panels(frame, model, gpu, tab, force=tab == 0, preferences=preferences)
+        dual_gpu_panels(frame, model, gpu, tab, force=tab == 0, preferences=preferences, gpu_metrics=gpu_metrics)
     elif tab == 0 and model.gpu_devices.get('amd_devices'):
         cards=[p for p in frame.panels if p['y']==6]
         if cards:cards[0]['title']='PoM HASHRATE / PRIMARY GPU'

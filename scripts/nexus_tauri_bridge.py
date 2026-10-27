@@ -9,18 +9,16 @@ import time
 import uuid
 
 
-def presentation(mirror, tab, log_filter, height=46):
+def presentation(mirror, tab, log_filter, height=46, log_before=None):
     from nexus_web_mirror import snapshot_for_model
-    from nexus_presenter import build_presenter_frame
     from nexus_ui_preferences import load, resolved_view, large_gpu_count, blend, contrast
     from nexus_gpu_registry import records, workload_options
     from nexus_notifications import notifications_enabled
     with mirror.lock:
         model, gpu = mirror.model.presentation_copy(), mirror.gpu
     preferences = load()
-    frame = snapshot_for_model(model, gpu, tab, log_filter)
-    frame['panels'] = build_presenter_frame(height, 160, model, gpu, tab, log_filter,
-                                            preferences=preferences).panels
+    frame = snapshot_for_model(model, gpu, tab, log_filter,
+                               height=height, preferences=preferences, log_before=log_before)
     bg, fg = preferences['background'], preferences['text']
     def readable(color):
         return color if contrast(color, bg) >= 4.5 else fg
@@ -76,11 +74,15 @@ def main():
             raise ValueError('Unsupported presentation request')
         try:
             if request.get('op') == 'snapshot':
-                if set(request) != {'schema_version', 'op', 'tab', 'filter', 'height'}:
+                if set(request) not in ({'schema_version', 'op', 'tab', 'filter', 'height'},
+                                        {'schema_version', 'op', 'tab', 'filter', 'height', 'log_before'}):
                     raise ValueError('Invalid snapshot fields')
                 if type(request['tab']) is not int or not isinstance(request['filter'], str) or type(request['height']) is not int or not 16 <= request['height'] <= 46:
                     raise ValueError('Invalid snapshot fields')
-                frame = presentation(mirror, request['tab'], request['filter'], request['height'])
+                before = request.get('log_before')
+                if before is not None and (type(before) is not int or not 0 <= before <= 9007199254740991):
+                    raise ValueError('Invalid history cursor')
+                frame = presentation(mirror, request['tab'], request['filter'], request['height'], before)
             elif request.get('op') == 'action':
                 if set(request) != {'schema_version', 'op', 'action', 'value', 'confirmed'} or type(request['confirmed']) is not bool:
                     raise ValueError('Invalid action fields')

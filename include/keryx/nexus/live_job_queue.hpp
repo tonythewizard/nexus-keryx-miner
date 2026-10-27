@@ -59,7 +59,6 @@ private:
   bool closed_{};
   bool refresh_pending_{};
   std::uint64_t refresh_notifications_{};
-  std::string last_job_identity_;
 };
 
 } // namespace keryx::nexus

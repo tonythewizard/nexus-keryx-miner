@@ -24,11 +24,12 @@ Challenge parse_challenge(const std::string &wire);
 std::string official_qwen35_prompt(const std::string &nonce_hex);
 // Exact v0.5.7 Qwen family ChatML wrapper for AiRequest prompts.
 std::string official_qwen35_ai_prompt(std::string_view user_prompt);
+std::pair<std::string,std::string> official_qwen35_trace_prompt(std::string_view user_prompt);
 std::string format_inference_result(const Challenge &challenge, const std::string &text);
 std::vector<int> qwen35_context_candidates(int configured_context = -1);
 bool challenge_enabled_for_network(const std::string &network, std::uint64_t daa_score) noexcept;
 
-// Adapter to the stock miner's libkeryx-llama ABI 3 or 6. It refuses to load unless
+// Adapter to the stock miner's libkeryx-llama ABI 3/6/8/9. It refuses to load unless
 // CUDA_VISIBLE_DEVICES is exactly the authorized RTX UUID and the GGUF SHA-256
 // matches the installed tier-0 model. Loading/generation is intentionally lazy
 // at the caller: mining must be paused and its CUDA buffers released first.
@@ -57,11 +58,15 @@ public:
   TracedGeneration trace_tokens(std::span<const std::int32_t> tokens);
   std::vector<std::vector<std::uint8_t>> replay_trace_multi(const TracedGeneration &capture,
       std::span<const std::pair<std::uint32_t,std::uint32_t>> captures,std::uint32_t slot_bytes);
+  std::uint32_t configure_sequence(std::span<const SequenceLayer> layers,std::uint32_t n_attn,
+      std::uint32_t n_recur,std::uint32_t heads,std::uint32_t interval);
+  std::vector<SequenceCapture> replay_sequence(const TracedGeneration &,std::span<const SequenceSpan>,std::uint32_t max_chunks);
   int abi_version() const noexcept;
-  // ABI8 only. Caller must release/synchronize any PoM pad before switching
+  std::uint32_t trace_context_capacity() const noexcept;
+  // ABI8/9. Caller must release/synchronize any PoM pad before switching
   // context; acquisition never resets the shared CUDA primary context.
   void use_task_context();
-  // ABI6 only. The caller must own exclusive GPU admission; no transaction is
+  // ABI6/8/9. The caller must own exclusive GPU admission; no transaction is
   // signed or submitted by these methods. ABI3 always fails closed here.
   std::uint32_t configure_trace(std::span<const std::uint8_t> manifest, std::uint32_t positions, std::uint32_t expected_leaves = 0);
   TracedGeneration infer_traced(std::string_view prompt, const TracePrefix *prefix,

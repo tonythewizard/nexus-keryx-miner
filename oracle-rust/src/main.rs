@@ -7,6 +7,7 @@ use keryx_consensus_core::{
 use keryx_math::Uint256;
 use std::{env, fs, path::Path};
 mod cuda_batch;
+mod v5;
 mod gguf_index;
 mod platform;
 #[cfg(unix)]
@@ -81,6 +82,7 @@ fn header_fixture(path: &Path) {
         0x8877665544332211,
         Hash::from_bytes([0x88; 32]),
         3,
+        Hash::default(),
     );
     let override_hash =
         hash_override_nonce_time(&header, 0x0f1e2d3c4b5a6978, 1_700_000_321).as_bytes();
@@ -189,7 +191,7 @@ fn live_header_fixture(path: &Path) {
         assert_eq!(q, row.len(), "trailing live-header row bytes");
         let header = Header::new_finalized(
             version, parents, merkle, accepted, utxo, timestamp, bits, nonce, daa, blue,
-            blue_score, pruning, pom_state, service, tier,
+            blue_score, pruning, pom_state, service, tier, Hash::default(),
         );
         assert_eq!(
             header.hash.as_bytes(),
@@ -273,6 +275,10 @@ fn main() {
     }
     let mode = &args[1];
     let path = Path::new(&args[2]);
+    if mode == "verify-v5-fixture" || mode == "verify-v5-real" {
+        v5::verify(path, mode == "verify-v5-real");
+        return;
+    }
     if mode == "header" {
         header_fixture(path);
         return;
@@ -308,6 +314,7 @@ fn main() {
         steps_v2: None,
         v3: None,
         v4: Some(v4),
+        task: None,
     };
     let target = [0xffu8; 32];
     pom_v4::verify_pom_proof_v4_container(seed, &proof, leaves.len() as u64, &rt, &target, |s| {

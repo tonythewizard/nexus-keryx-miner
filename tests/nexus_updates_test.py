@@ -141,6 +141,7 @@ class UpdateTests(unittest.TestCase):
         with mock.patch.object(updates,'github') as github:updates.check();github.assert_not_called()
         self.assertEqual(updates.status()['status'],'STOPPED')
     def test_notification_and_wait_for_validated_release(self):
+        updates.atomic(self.state/'config.json', {'enabled': True})
         def github(path):
             if '/commits/' in path:return dict(sha=self.commit,commit=dict(committer=dict(date='2099-01-01T00:00:00Z')))
             if '/releases?' in path:return []
