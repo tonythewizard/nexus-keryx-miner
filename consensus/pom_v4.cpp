@@ -421,7 +421,7 @@ std::vector<std::uint8_t> make_reference_test_blob() {
   }
   return blob;
 }
-Hash v4_initial_state_hash(std::uint64_t seed) {
+std::array<std::uint8_t, tile_bytes> v4_initial_state_bytes(std::uint64_t seed) {
   std::array<std::uint8_t, tile_bytes> s{};
   for (std::size_t r = 0; r < 32; r++) {
     std::uint64_t h = mix64(seed ^ (s0_salt + static_cast<std::uint64_t>(r)));
@@ -432,7 +432,15 @@ Hash v4_initial_state_hash(std::uint64_t seed) {
         s[r * 32 + k * 4 + i] = static_cast<std::uint8_t>(v >> (i * 8));
     }
   }
-  return blake3_hash(s);
+  return s;
+}
+Hash v4_initial_state_hash(std::uint64_t seed) { return blake3_hash(v4_initial_state_bytes(seed)); }
+void v4_transition_into(std::array<std::uint8_t, tile_bytes> &out,
+                        const std::array<std::uint8_t, tile_bytes> &state,
+                        const std::array<std::uint8_t, tile_bytes> &tile, std::uint32_t step) {
+  if (&out == &state || &out == &tile || step == 0 || step > walk_steps)
+    throw std::invalid_argument("invalid v4/v5 transition buffers or step");
+  v4_step_dispatch()(state.data(), out.data(), tile.data(), step);
 }
 Walk walk_v4(std::uint64_t seed, std::span<const std::uint8_t> blob) {
   if (blob.size() % 32)

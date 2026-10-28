@@ -16,7 +16,7 @@ pub const POM_V5_TILE_ENTRIES: u64 = (POM_V4_TILE_BYTES / POM_V5_P_ENTRY_BYTES) 
 /// ARX rounds per pad entry.
 pub const POM_V5_P_ROUNDS: u32 = 1_920;
 /// Context pad tiles of each H14 tier; 0 = no pad. Mirror of the node's `POM_V5_PAD_TILES_H14`.
-pub const POM_V5_PAD_TILES_H14: [u64; 5] = [773_120, 1_146_880, 865_280, 3_105_792, 0];
+pub const POM_V5_PAD_TILES_H14: [u64; 5] = [638_976, 3_213_312, 4_804_608, 6_471_680, 2_450_432];
 
 const PAD_DOMAIN: &[u8] = b"KERYX-POM-V5-PAD";
 /// IV folded into the pad seed words.

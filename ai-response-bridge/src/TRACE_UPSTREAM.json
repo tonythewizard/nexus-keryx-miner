@@ -1,0 +1,99 @@
+{
+  "repository": "https://github.com/Keryx-Labs/keryx-miner",
+  "commit": "e237055b2ebd8dc687328793b209ecfd7c0d2c0b",
+  "source": "src/trace.rs",
+  "sha256": "29fe2c61a00c7242f167e9e4c47c01b2fb427d5663e2d72ae939d3a93327b7dd",
+  "local_adapter": "trace_producer.rs",
+  "adaptations": [
+    "WeightIndex trait over existing resident index",
+    "Explicit network/DAA rules from protocol_rules, including attention on both networks from H15",
+    "Retain bounded capture admission and stock-compatible legacy persistence format",
+    "SequenceTrace remains separate from legacy positional records and is persisted by the native audit store",
+    "Retain existing local tests and upstream attention manifest tests",
+    "Borrowed positional leaves for bounded native persistence/replay",
+    "Allow pure chain body assembly before the native producer binds positional/sequence roots and performs official point checks",
+    "Separate seeded residual piece with product/expert feed row; legacy inline helpers remain compatibility-only",
+    "Checked deadline-chain arithmetic prevents malformed overflow",
+    "Routed residual opens expert sums only without post-FFN normalization, matching the canonical node draw",
+    "Native metadata schema4 appends durable node-ledger authority and reads unchanged schema3/schema2 layouts",
+    "Checked local chained deadlines are estimates without the obsolete local queue-cap exemption; node ledger replaces seed and deadline",
+    "Read-only GetAwaitedOpenings polls are gated at node1.6.6, bounded to1024 and preserve local estimates for older nodes",
+    "Native ABI9 capture remains limited to32768 positions despite the broader131072 protocol/context override cap"
+  ],
+  "previous_commit": "bc69a4e23faf99d34dcaf5326644c5a5641ca6af",
+  "additional_sources": {
+    "src/trace_seq.rs": {
+      "sha256": "3bbb3140c32fd012c6daf0af4d47f5a75f173feec3afea8b4bd93920fa543aed",
+      "adapter": "trace_sequence.rs",
+      "adaptations": [
+        "Use the resident WeightIndex trait and standalone captured bytes/CVs instead of the official engine type",
+        "Use trace_producer module; no worker, GPU or persistence effects"
+      ]
+    },
+    "src/client/grpc.rs": {
+      "sha256": "33a59024c3b385a8963acf33f2d9669398a3f587679a24aad2875aade74ec374",
+      "adapter": "h15_service.rs, h15_audit_client.cpp, trace_recovery.rs and trace_speeds.rs",
+      "adaptations": [
+        "Native CUDA tier-0 lifecycle connects the policy helpers through h15_service.rs and h15_audit_client.cpp; unsupported routes retain H15 refusal",
+        "Preserve legacy positional storage; new ordered v5 audit store uses separate namespace, retains invalid files and reports IO failures"
+      ]
+    },
+    "src/trace_store.rs": {
+      "sha256": "f72d6013cb37cc1a03c20a87b5859eca46f9ea6c9e1c8887d24323ccb9b0127e",
+      "adapter": "trace_audit_store.rs",
+      "adaptations": [
+        "Native CUDA tier-0 lifecycle connects the policy helpers through h15_service.rs and h15_audit_client.cpp; unsupported routes retain H15 refusal",
+        "Preserve legacy positional storage; new ordered v5 audit store uses separate namespace, retains invalid files and reports IO failures"
+      ]
+    },
+    "src/llm.rs": {
+      "sha256": "90cf668eb9f14d1c8cca1e81cca1366bdd134add36a849b1b4f0466a5ce3e7e5",
+      "adapter": "trace_sequence.rs",
+      "adaptations": [
+        "Native CUDA tier-0 lifecycle connects the policy helpers through h15_service.rs and h15_audit_client.cpp; unsupported routes retain H15 refusal",
+        "Preserve legacy positional storage; new ordered v5 audit store uses separate namespace, retains invalid files and reports IO failures"
+      ]
+    },
+    "src/llama_engine.rs": {
+      "sha256": "f24c62c1370a53da2939db6e44a355f87c2ed0645fcdaa41740dd9d26827ba49",
+      "adapter": "src/network/opoi.cpp",
+      "adaptations": [
+        "Clamp parsed context override to1..131072; retain stricter32768 native capture admission"
+      ]
+    }
+  },
+  "native_adapters": {
+    "h15_producer.rs": "Native replay orchestration and checked chain/attention/recurrent proofs over the imported builders",
+    "h15_bridge.rs": "Bounded C ABI for native capture and replay callbacks",
+    "h15_service.rs": "Original durable phase/response state machine: per-key chained deadlines, backlog retention, paced opening/replay retry, early-response resend, immutable trace and fsync-before-send",
+    "h15_audit_client.cpp": "Original native worker transport and GPU ownership integration"
+  },
+  "protocol_sources": {
+    "proto/messages.proto": "35d4ac835cfaa0efbe85db56ca17e9ea827525717c474d130ef6a8cc01bef843",
+    "proto/rpc.proto": "697df7f80cff86073ddaa9641d6ad676eff19427eca3946f06e9218752ccd395",
+    "src/keryxd_messages.rs": "c9f095de51a1de92db5280db9becac849b3504dba2977ba8564225808033db90"
+  },
+  "diagnostic_refresh": {
+    "repository": "https://github.com/Keryx-Labs/keryx-miner",
+    "commit": "41d33919ccea4001e44da30c8a19a8c29050ea13",
+    "base": "e237055b2ebd8dc687328793b209ecfd7c0d2c0b",
+    "source": "src/client/grpc.rs",
+    "sha256": "c11a6ffa07e55a78565d9bc1189236a7ed0bba05c9d97dc64b3e2b49958a31fd",
+    "adapter": "h15_service.rs",
+    "scope": "Diagnostic-only: distinguish restored opening, first node seed and mismatch; immutable intents and canonical acceptance remain separate"
+  },
+  "client_policy_refresh": {
+    "repository": "https://github.com/Keryx-Labs/keryx-miner",
+    "commit": "9586f96dc957b29031514256edf5d1b599d810b2",
+    "base": "41d33919ccea4001e44da30c8a19a8c29050ea13",
+    "source": "src/client/grpc.rs",
+    "sha256": "223b3297640bbc03aee2d4ba90f5cd09ff56124d9b86032ad31a1f7f6967c509",
+    "adapter": "h15_service.rs",
+    "scope": "Skip expired replays unless a capable node still awaits them; retire explicitly omitted expired duties while retaining child-draw obligations and durable signed records",
+    "adaptations": [
+      "Track exact polled response IDs and successful membership in session memory; no metadata schema change",
+      "Malformed or failed polls never release duties; old nodes and restart retain their existing reconciliation boundaries",
+      "Native synchronous build/submission ownership has no detached replay in flight; canonical child draw remains required"
+    ]
+  }
+}

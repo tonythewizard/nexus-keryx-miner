@@ -1030,7 +1030,7 @@ dependencies = [
 
 [[package]]
 name = "keryx-addresses"
-version = "1.6.4"
+version = "1.6.5"
 dependencies = [
  "borsh",
  "js-sys",
@@ -1044,7 +1044,7 @@ dependencies = [
 
 [[package]]
 name = "keryx-consensus-core"
-version = "1.6.4"
+version = "1.6.5"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -1066,6 +1066,7 @@ dependencies = [
  "keryx-muhash",
  "keryx-txscript-errors",
  "keryx-utils",
+ "keryx-verifiable-inference",
  "rand 0.8.8",
  "rayon",
  "secp256k1",
@@ -1083,7 +1084,7 @@ dependencies = [
 
 [[package]]
 name = "keryx-core"
-version = "1.6.4"
+version = "1.6.5"
 dependencies = [
  "anyhow",
  "cfg-if",
@@ -1102,7 +1103,7 @@ dependencies = [
 
 [[package]]
 name = "keryx-hashes"
-version = "1.6.4"
+version = "1.6.5"
 dependencies = [
  "blake2b_simd",
  "borsh",
@@ -1120,7 +1121,7 @@ dependencies = [
 
 [[package]]
 name = "keryx-math"
-version = "1.6.4"
+version = "1.6.5"
 dependencies = [
  "borsh",
  "faster-hex",
@@ -1139,14 +1140,14 @@ dependencies = [
 
 [[package]]
 name = "keryx-merkle"
-version = "1.6.4"
+version = "1.6.5"
 dependencies = [
  "keryx-hashes",
 ]
 
 [[package]]
 name = "keryx-muhash"
-version = "1.6.4"
+version = "1.6.5"
 dependencies = [
  "keryx-hashes",
  "keryx-math",
@@ -1156,7 +1157,7 @@ dependencies = [
 
 [[package]]
 name = "keryx-txscript-errors"
-version = "1.6.4"
+version = "1.6.5"
 dependencies = [
  "secp256k1",
  "thiserror 1.0.69",
@@ -1164,7 +1165,7 @@ dependencies = [
 
 [[package]]
 name = "keryx-utils"
-version = "1.6.4"
+version = "1.6.5"
 dependencies = [
  "arc-swap",
  "async-channel 2.5.0",
@@ -1189,6 +1190,14 @@ dependencies = [
  "triggered",
  "uuid 1.27.0",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "keryx-verifiable-inference"
+version = "1.6.5"
+dependencies = [
+ "blake3",
+ "libm",
 ]
 
 [[package]]

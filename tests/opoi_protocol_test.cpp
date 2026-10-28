@@ -65,6 +65,9 @@ int main(int argc, char **argv) {
       throw std::runtime_error("Qwen3.5 context ladder differs from official tier cap/floor");
     if (keryx::nexus::opoi::qwen35_context_candidates(4096) != std::vector<int>{4096})
       throw std::runtime_error("KERYX_LLAMA_CTX override was not preserved");
+    if (keryx::nexus::opoi::qwen35_context_candidates(0) != std::vector<int>{1} ||
+        keryx::nexus::opoi::qwen35_context_candidates(200000) != std::vector<int>{131072})
+      throw std::runtime_error("context override protocol cap mismatch");
     using keryx::nexus::opoi::challenge_enabled_for_network;
     if (!challenge_enabled_for_network("mainnet", 37'779'999) ||
         challenge_enabled_for_network("mainnet", 37'780'000) ||

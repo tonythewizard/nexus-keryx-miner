@@ -85,5 +85,23 @@ class DesktopActionTests(unittest.TestCase):
                     self.assertNotIn('escrow_public_key',actual)
                     self.assertNotIn('setup_key_exists',actual)
 
+    def test_presenter_preserves_all_pages_at_supported_viewport_heights(self):
+        import nexus_dashboard
+        import nexus_tauri_bridge
+        import nexus_presenter
+        model = nexus_dashboard.DashboardModel()
+        model.fixture_mode = True
+        mirror = SimpleNamespace(lock=threading.Lock(), model=model, gpu='UNKNOWN')
+        values = copy.deepcopy(preferences.DEFAULTS)
+        with patch.object(preferences, 'load', return_value=values):
+            for height in (16, 32, 46):
+                for page in range(9):
+                    with self.subTest(height=height, page=page):
+                        actual = nexus_tauri_bridge.presentation(mirror, page, 'ALL', height=height)
+                        expected = nexus_presenter.build_presenter_frame(height, 160, model, 'UNKNOWN', page, 'ALL', preferences=values)
+                        self.assertEqual(actual['panels'], expected.panels)
+                        self.assertNotIn('escrow_public_key', actual)
+                        self.assertNotIn('setup_key_exists', actual)
+
 
 if __name__=='__main__':unittest.main()

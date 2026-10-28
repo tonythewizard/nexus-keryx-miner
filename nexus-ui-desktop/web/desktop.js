@@ -29,6 +29,8 @@ const roles = new Set([
 ]);
 let tab = 0,
   filter = "ALL",
+  logBefore = null,
+  logSession = "",
   busy = false,
   acting = false,
   timer = null,
@@ -75,6 +77,8 @@ pages.forEach((name, i) => {
 });
 $("log-filter").onchange = () => {
   filter = $("log-filter").value;
+  logBefore = null;
+  layoutKey = "";
   clearTimeout(timer);
   if (!busy && !acting) poll();
 };
@@ -332,12 +336,40 @@ function rowNode(row, panel, frame) {
   if (!name) { e.classList.add("free-row"); e.title = value; }
   return e;
 }
+function selectLogPage(before) {
+  logBefore = before;
+  layoutKey = "";
+  clearTimeout(timer);
+  if (!busy && !acting) poll();
+}
 function panelNode(panel, frame, index) {
   const card = make("fieldset", undefined, "card");
   if (panel.kind) card.classList.add(panel.kind);
   card.append(make("legend", panel.title));
+  if (panel.log_history) {
+    const h = panel.log_history;
+    const nav = make("div", undefined, "log-navigation");
+    const older = button("Older", () => selectLogPage(h.older_before));
+    older.disabled = h.older_before === null;
+    const newer = button("Newer", () => selectLogPage(h.newer_before));
+    newer.disabled = !h.has_newer;
+    const latest = button("Latest / live", () => selectLogPage(null));
+    latest.disabled = h.live;
+    nav.append(older, newer, latest, make("span",
+      `${h.total ? h.start + 1 : 0}–${h.end} / ${h.total} · ${h.live ? "session history + live" : "history · new events retained"}`));
+    card.append(nav);
+  }
   const rows = make("div", undefined, "rows");
   card.append(rows);
+  if (panel.log_history?.live) {
+    rows.onscroll = () => {
+      if (logBefore === null && rows.scrollHeight - rows.clientHeight - rows.scrollTop > 24) {
+        logBefore = panel.log_history.end;
+        clearTimeout(timer);
+        if (!busy && !acting) poll();
+      }
+    };
+  }
   if (Array.isArray(panel.table_columns) && Array.isArray(panel.table_rows)) {
     const table = make("table");
     const head = make("tr");
@@ -756,8 +788,16 @@ function render(frame) {
       cache.set(key, { encoded, element: old.element });
       return;
     }
+    const oldLogRows = panel.log_history && old?.element.querySelector(".rows");
+    const scrollTop = oldLogRows?.scrollTop || 0;
+    const followBottom = oldLogRows && panel.log_history.live &&
+      oldLogRows.scrollHeight - oldLogRows.clientHeight - scrollTop <= 24;
     if (old) old.element.replaceWith(card);
     else $("panels").append(card);
+    if (panel.log_history) {
+      const rows = card.querySelector(".rows");
+      rows.scrollTop = followBottom || (!old && panel.log_history.live) ? rows.scrollHeight : scrollTop;
+    }
     cache.set(key, { encoded, element: card });
   });
   for (const [key, item] of cache)
@@ -777,7 +817,8 @@ async function poll() {
   if (busy || acting) return;
   busy = true;
   const page = tab,
-    selectedFilter = filter;
+    selectedFilter = filter,
+    selectedBefore = logBefore;
   try {
     const height =
       page === 4
@@ -790,8 +831,21 @@ async function poll() {
       tab: page,
       filter: selectedFilter,
       height,
+      logBefore: selectedBefore,
     });
-    if (page === tab && selectedFilter === filter) render(frame);
+    if (page === tab && selectedFilter === filter && selectedBefore === logBefore) {
+      const history = frame.panels?.find(p => p.log_history)?.log_history;
+      if (history) {
+        const changedSession = logSession && logSession !== history.session;
+        logSession = history.session;
+        if (changedSession && logBefore !== null) {
+          logBefore = null;
+          layoutKey = "";
+          return;
+        }
+      }
+      render(frame);
+    }
   } catch (error) {
     document.body.classList.add("disconnected");
     text(
@@ -803,7 +857,7 @@ async function poll() {
     if (!acting)
       timer = setTimeout(
         poll,
-        page !== tab || selectedFilter !== filter
+        page !== tab || selectedFilter !== filter || selectedBefore !== logBefore
           ? 0
           : document.hidden
             ? 5000

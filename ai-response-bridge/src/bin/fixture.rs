@@ -17,7 +17,7 @@ fn main() -> Result<(), String> {
     if args.len() != 5 { return Err("usage: fixture public|private MODEL_ID_HEX PROMPT OUTPUT".into()); }
     let model = hex32(&args[2])?;
     let prompt = args[3].as_bytes();
-    let mut requester_root = [0u8; 32];
+    let mut requester_secret = Vec::new();
     let escrow_secret = [0x22u8; 32];
     let escrow_pubkey = escrow_pubkey_of(&escrow_secret).map_err(|_| "test escrow key invalid")?;
     let payout_secret = SecretKey::from_slice(&[0x11u8; 32]).map_err(|_| "test payout key invalid")?;
@@ -33,7 +33,7 @@ fn main() -> Result<(), String> {
         "private" => {
             let (request, secret) = seal_request(model, 16, 20_000_000, 30_000_000, prompt, &[escrow_pubkey])
                 .map_err(|_| "official private fixture creation failed")?;
-            requester_root = secret.root_key;
+            requester_secret = hex::decode(secret.to_hex()).map_err(|_| "fixture secret encoding")?;
             request.serialize()
         }
         _ => return Err("fixture kind must be public or private".into()),
@@ -49,7 +49,8 @@ fn main() -> Result<(), String> {
         .map_err(|e| format!("cannot create isolated fixture: {e}"))?;
     file.write_all(&(payload.len() as u32).to_le_bytes()).map_err(|e| e.to_string())?;
     file.write_all(&payload).map_err(|e| e.to_string())?;
-    file.write_all(&requester_root).map_err(|e| e.to_string())?;
+    file.write_all(&[requester_secret.len() as u8]).map_err(|e| e.to_string())?;
+    file.write_all(&requester_secret).map_err(|e| e.to_string())?;
     file.write_all(&escrow_pubkey).map_err(|e| e.to_string())?;
     file.write_all(cert.as_ref()).map_err(|e| e.to_string())?;
     file.sync_all().map_err(|e| e.to_string())?;

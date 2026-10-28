@@ -13,6 +13,16 @@ inline GpuBackend parse_gpu_backend(const char* value) {
   throw std::runtime_error("unknown NEXUS_POM_BACKEND; expected cuda-driver, vulkan-jit, or vulkan-bda");
 }
 
+// The UUID gate remains authoritative for physical identity. Model and SM
+// checks additionally bind the optimized kernel to the locally configured card.
+inline void require_cuda_model(std::string_view actual_name, int major, int minor,
+                               const char* configured_name) {
+  if (!configured_name || !*configured_name)
+    throw std::runtime_error("Explicit NEXUS_PRIMARY_GPU_NAME required for CUDA model admission");
+  if (actual_name != configured_name || major != 8 || minor != 6)
+    throw std::runtime_error("CUDA PoM requires the configured GPU model and SM 8.6");
+}
+
 // Routing policy, not a claim that all CUDA or Vulkan devices are validated.
 // This native gate cannot be overridden by the Python GPU setup profile.
 inline GpuBackend require_production_gpu_backend(const char* backend,

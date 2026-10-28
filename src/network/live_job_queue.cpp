@@ -53,8 +53,7 @@ LiveJobQueue::PublishResult LiveJobQueue::publish(TemplateFields fields) {
   // The response envelope contains a per-request RPC id. Deduplicate the actual
   // consensus job, not that transport id, otherwise an identical template fetched
   // after reconnect is falsely treated as a new generation.
-  std::string identity = identity_bytes(fields);
-  if (identity == last_job_identity_) {
+  if (current_job_ && same_identity(fields, current_job_->fields)) {
     ++duplicates_;
     const bool resolving_refresh = refresh_pending_;
     refresh_pending_ = false;
@@ -74,7 +73,6 @@ LiveJobQueue::PublishResult LiveJobQueue::publish(TemplateFields fields) {
   const auto generation = ++next_generation_;
   active_ = std::make_shared<std::atomic_bool>(true);
   generation_ = generation;
-  last_job_identity_ = std::move(identity);
   refresh_pending_ = false;
   current_job_.emplace(TemplateJob{generation, std::move(fields), JobLease(generation, active_)});
   pending_ = *current_job_;
@@ -100,7 +98,6 @@ void LiveJobQueue::invalidate_for_virtual_chain_change() noexcept {
   generation_.reset();
   pending_.reset();
   current_job_.reset();
-  last_job_identity_.clear();
   refresh_pending_ = !closed_;
   ready_.notify_all();
 }
@@ -112,7 +109,6 @@ void LiveJobQueue::invalidate() noexcept {
   generation_.reset();
   pending_.reset();
   current_job_.reset();
-  last_job_identity_.clear();
   refresh_pending_ = false;
   ready_.notify_all();
 }

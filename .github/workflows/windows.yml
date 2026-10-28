@@ -128,12 +128,12 @@ jobs:
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: build/runtime-install
-          key: ${{ runner.os }}-inference-cuda13.0.2-${{ hashFiles('tools/runtime/**', 'vendor/keryx-trace-abi6/tools/keryx-llama/**') }}-v1
+          key: ${{ runner.os }}-inference-abi9-cuda13.0.2-${{ hashFiles('tools/runtime/**', 'vendor/keryx-trace-abi6/tools/keryx-llama/**') }}-v1
       - name: Build matching inference runtime
         if: steps.runtimecache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
-          cmake -S tools/runtime -B build/runtime -A x64
+          cmake -S tools/runtime -B build/runtime -A x64 -DNEXUS_RUNTIME_ABI=9
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           cmake --build build/runtime --config Release --target nexus_inference_runtime --parallel 2
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
@@ -165,7 +165,7 @@ jobs:
           python tools/collect_notices.py --output build/runtime-install/licenses `
             --cargo-home build/windows-worker/cargo-home --cargo-home "$env:USERPROFILE/.cargo"
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          python tools/package_release.py --platform windows `
+          python tools/package_release.py --platform windows --runtime-abi 9 `
             --worker-dir build/windows-worker/bin/Release `
             --oracle oracle-rust/target/release/nexus-m21-oracle.exe `
             --runtime-dir build/runtime-install --cuda-dir "$env:CUDA_PATH/bin/x64" `
@@ -238,6 +238,18 @@ jobs:
           cmake --build build/linux-worker --target nexus-live-cuda-worker --parallel 2
           python3 tools/fetch_upstream.py
           cargo build --release --locked --manifest-path oracle-rust/Cargo.toml
+      - name: AI bridge protocol and recovery tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .local/tmp build/escrow-tests
+          export TMPDIR="$PWD/.local/tmp"
+          export NEXUS_ESCROW_TEST_DIR="$PWD/build/escrow-tests"
+          export CARGO_TARGET_DIR="$PWD/build/linux-worker/ai-bridge-target"
+          export CARGO_HOME="$PWD/build/linux-worker/cargo-home"
+          export PROTOC="$PWD/build/linux-worker/vcpkg_installed/x64-linux/tools/protobuf/protoc"
+          test -x "$PROTOC"
+          cargo test --release --locked --manifest-path ai-response-bridge/Cargo.toml --jobs 2
       - name: CPU and native file tests
         shell: bash
         run: |
@@ -255,13 +267,13 @@ jobs:
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: build/runtime-install
-          key: ${{ runner.os }}-inference-cuda13.0.2-${{ hashFiles('tools/runtime/**', 'vendor/keryx-trace-abi6/tools/keryx-llama/**') }}-v1
+          key: ${{ runner.os }}-inference-abi9-cuda13.0.2-${{ hashFiles('tools/runtime/**', 'vendor/keryx-trace-abi6/tools/keryx-llama/**') }}-v1
       - name: Build matching inference runtime
         if: steps.runtimecache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           set -euo pipefail
-          cmake -S tools/runtime -B build/runtime -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake -S tools/runtime -B build/runtime -G Ninja -DCMAKE_BUILD_TYPE=Release -DNEXUS_RUNTIME_ABI=9
           cmake --build build/runtime --target nexus_inference_runtime --parallel 2
           cmake --install build/runtime --prefix "$PWD/build/runtime-install" --component nexus-runtime
       - name: Save matching inference runtime
@@ -281,7 +293,7 @@ jobs:
           done
           python3 tools/collect_notices.py --output build/runtime-install/licenses \
             --cargo-home build/linux-worker/cargo-home --cargo-home "$HOME/.cargo"
-          python3 tools/package_release.py --platform linux \
+          python3 tools/package_release.py --platform linux --runtime-abi 9 \
             --worker-dir build/linux-worker/bin --oracle oracle-rust/target/release/nexus-m21-oracle \
             --runtime-dir build/runtime-install --cuda-dir "$CUDA_PATH/lib64" --inspector /usr/bin/readelf \
             --cuda-license /usr/share/doc/cuda-cudart-13-0/copyright

@@ -80,9 +80,9 @@ def summary(model, gpu):
             'missing_reason': 'AMD does not publish all completed kernels or completed-stale work; reserved discards are not completed hashes'}
 
 
-def header_hashrate(model, gpu):
+def header_hashrate(model, gpu, *, metrics=None):
     import nexus_dashboard as dashboard
-    data = summary(model, gpu)
+    data = summary(model, gpu) if metrics is None else metrics
     if not data['dual']:
         return 'PoM', dashboard.pom_hashrate(model, '10s')
     window = next((str(w) for w in (60, 10, 1) if data['rates'][str(w)]['total'] is not None), '10')

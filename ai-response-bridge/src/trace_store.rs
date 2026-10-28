@@ -260,7 +260,9 @@ impl BuiltOpenings {
 pub struct AcceptanceRestore {
     queued: std::collections::VecDeque<String>,
     in_flight: std::collections::BTreeSet<String>,
-    retries: crate::trace_recovery::ChainRestoreRetries,
+    // Legacy positional-store admission keeps its bounded read gate. H15 audit
+    // restoration uses the separate backoff planner and audit namespace.
+    retries: std::collections::BTreeMap<[u8;32],u32>,
     blocked: std::collections::BTreeSet<String>,
 }
 impl AcceptanceRestore {
@@ -289,7 +291,7 @@ impl AcceptanceRestore {
             return Err(invalid());
         }
         self.blocked.remove(hash);
-        self.retries.succeeded(&key);
+        self.retries.remove(&key);
         Ok(())
     }
     /// A failed read is retried at most twice. Exhaustion keeps the unresolved
@@ -297,7 +299,9 @@ impl AcceptanceRestore {
     pub fn failed(&mut self, hash: &str) -> io::Result<bool> {
         let key = decode_block_hash(hash)?;
         if !self.in_flight.contains(hash) || self.blocked.contains(hash) { return Err(invalid()); }
-        if self.retries.failed(key) {
+        let failures=self.retries.entry(key).or_default();
+        *failures=failures.saturating_add(1);
+        if *failures<3 {
             self.in_flight.remove(hash);
             self.queued.push_back(hash.to_owned());
             Ok(true)

@@ -10,6 +10,7 @@ RECOVERY = pathlib.Path(os.environ.get("NEXUS_TEST_RECOVERY_ROOT", str(ROOT.pare
 
 
 class LauncherPolicyTests(unittest.TestCase):
+    @unittest.skipUnless((ROOT / "scripts/nexusmine.fish").is_file(), "requires optional private installation fixture")
     def test_shadow_live_forces_environment_and_worker_mode_off(self):
         fish = (ROOT / "scripts/nexusmine.fish").read_text(encoding="utf-8")
         branch = fish.split("    case shadow-live", 1)[1].split("    case live", 1)[0]
@@ -24,6 +25,7 @@ class LauncherPolicyTests(unittest.TestCase):
         self.assertIn('worker_env.pop("NEXUS_SUBMIT_ENDPOINT", None)', helper)
         self.assertIn('"shadow", "--no-submit"]', helper)
 
+    @unittest.skipUnless((ROOT / "scripts/nexusmine.fish").is_file(), "requires optional private installation fixture")
     def test_live_requires_exact_cli_opt_in_and_uses_attested_worker(self):
         fish = (ROOT / "scripts/nexusmine.fish").read_text(encoding="utf-8")
         branch = fish.split("    case live", 1)[1].split("    case shadow-replay", 1)[0]
@@ -36,6 +38,7 @@ class LauncherPolicyTests(unittest.TestCase):
         self.assertEqual(len(set(pinned_hashes)), 1)
         self.assertIn('"$out" 0 4 live "$submit_flag"', branch)
 
+    @unittest.skipUnless((ROOT / "scripts/nexusmine-next.fish").is_file(), "requires optional private installation fixture")
     def test_candidate_launcher_is_separate_fail_closed_and_tui_read_only(self):
         candidate = (ROOT / "scripts/nexusmine-next.fish").read_text(encoding="utf-8")
         self.assertIn("--enable-submit", candidate)
@@ -69,6 +72,7 @@ class LauncherPolicyTests(unittest.TestCase):
                       (ROOT / "src/model/live_cuda_worker.cpp").read_text(encoding="utf-8"))
         self.assertNotIn("exec \"$worker\"", candidate)
 
+    @unittest.skipUnless((ROOT / "scripts/nexusmine-next.fish").is_file(), "requires optional private installation fixture")
     def test_vulkan_ai_is_explicit_pinned_and_checked_after_worker_hash(self):
         candidate=(ROOT / "scripts/nexusmine-next.fish").read_text()
         self.assertIn('set -l ai_backend auto',candidate)
@@ -82,6 +86,7 @@ class LauncherPolicyTests(unittest.TestCase):
         self.assertIn('NEXUS_VULKAN_AI_LIBRARY_SHA256',candidate)
         self.assertLess(candidate.index('set -l actual_hash'),candidate.index('"$worker" --inference-capabilities'))
 
+    @unittest.skipUnless((RECOVERY / "artifacts/escrow-backups/20261011/stock-state.json").is_file(), "requires optional private installation fixture")
     def test_escrow_import_pin_matches_immutable_backup(self):
         source = (ROOT / "src/model/live_cuda_worker.cpp").read_text(encoding="utf-8")
         expected = "c890191b98ad5f0bf6e63fd974ad2e0c2d0eb1ee4347f49d8e8bb43447cd5f3e"

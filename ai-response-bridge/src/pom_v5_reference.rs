@@ -60,7 +60,7 @@ mod pom_v5;
 #[test]
 fn v5_pad_geometry_and_distribution_are_not_v4() {
     use pom_v5::*;
-    assert_eq!(POM_V5_PAD_TILES_H14,[773120,1146880,865280,3105792,0]);
+    assert_eq!(POM_V5_PAD_TILES_H14,[638976,3213312,4804608,6471680,2450432]);
     for (weight,pad) in [(64,61),(1,10000),(10000,1)] {
         let steps=v5_pad_steps(weight,pad);
         assert!((1..256).contains(&steps));

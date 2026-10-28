@@ -142,7 +142,7 @@ export NEXUS_ESCROW_TEST_DIR="$PWD/.local/escrow-tests"
 cargo test --locked --manifest-path ai-response-bridge/Cargo.toml
 ```
 
-The oracle manifest resolves public node crates from ignored `_deps/keryx-node`.
+The oracle manifest resolves public node crates from ignored `_deps/keryx-node-16d1864d835a`.
 The fetch helper pins an official upstream commit and refuses to replace a
 different or dirty existing checkout. No locally modified node is included.
 To register oracle-dependent CTest fixtures, pass the absolute built oracle path
@@ -157,7 +157,9 @@ Keep the real hardware profile in environment variables and an ignored CMake
 cache. Set the runtime environment variable `NEXUS_PRIMARY_GPU_UUID` to the intended NVIDIA UUID, and optionally
 `NEXUS_SECONDARY_GPU_ID` to the selected `pci:...` identity. The committed zero
 values are inert fixtures. C++ uses local CMake definitions; Python reads the
-same names from the environment. Keep both values consistent.
+same names from the environment. Keep both values consistent. For native PoM
+walks, set `NEXUS_PRIMARY_GPU_NAME` locally to the authorized card's exact driver
+name; the model check supplements the UUID gate and still requires SM 8.6.
 
 ```sh
 # Set these variables privately before running this configuration.
@@ -249,8 +251,11 @@ then run the specific module. For C++ use CTest filters (`-R`) or the target's
 test binary. Pure policy tests can run without CUDA initialization. Distinguish
 syntax checks, deterministic CPU/mock tests, real GPU execution, oracle proof
 parity and live network acceptance. A successful CPU build certifies none of the
-last three. Full H15 traced inference, mainnet activation and arbitrary GPU
-scheduling are not established by the available adapters or UI options.
+last three. Native CUDA tier-0 H15 traced inference, recovery and real inference handoff
+are validated locally; see `docs/h15-native-worker.md`. Arbitrary GPU scheduling
+and live H15 chain acceptance are not established by these tests. The pinned H15 schedule
+and legacy-worker refusal are documented in `docs/upstream-protocol-sync.md`;
+scheduled activation does not establish runtime support.
 
 Before a commit, review the diff and staged files. The security gate scans the
 actual staged bytes; the push hook and CI scan reachable history as well. Refer
@@ -264,3 +269,11 @@ notices, exact source commit and checksums. See `docs/windows.md`.
 `tools/package_release.py` copies only named build outputs; runtime data is never
 an input. Binary packages remain outside Git. This workflow does not establish
 GPU execution, H15 completion, Windows desktop control or mainnet acceptance.
+
+The standalone runtime project keeps ABI8 as its configure default. The 0.0.4 native CI explicitly selects ABI9. Build
+with `-DNEXUS_RUNTIME_ABI=9` for the isolated candidate documented in
+`docs/abi9-runtime.md`; its sidecar remains marked candidate-only. Packaging requires explicit
+`--runtime-abi 9` and matching sidecar metadata; default ABI8 packaging rejects it. The native adapter accepts ABI9 with
+bounded sequence capture/replay and pinned formats; see `docs/abi9-adapter.md`.
+Native tier-0 CUDA traced worker persistence/recovery and real GPU validation
+are documented in `docs/h15-native-worker.md`; live H15 acceptance remains open.

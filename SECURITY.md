@@ -2,7 +2,7 @@
 
 ## Supported scope
 
-Version 0.0.3 is an experimental source baseline, not a supported binary
+Version 0.0.4 is an experimental source baseline, not a supported binary
 release. Maintainers review reports against the current `main` branch; no
 security maintenance period or response-time guarantee is promised for older
 commits or external models, drivers and services.

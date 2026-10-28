@@ -1,35 +1,38 @@
 {
   "repository": "https://github.com/Keryx-Labs/keryx-miner",
-  "commit": "f2561aedeb649da7b2c46fc4e845e487c9a7d9e5",
-  "previous_commit": "dad77e8e31f5e75cb69dd490a444e8e792a66c04",
+  "commit": "e237055b2ebd8dc687328793b209ecfd7c0d2c0b",
+  "previous_commit": "331cb63acbf9291628b01fa98c179e1aa8e07942",
   "files": {
     "verifiable-inference/Cargo.toml": "3b9d2cbd6468ae3eca412cfd1fc71d98e8d3e2c6c5fadfa08808050404005b03",
     "verifiable-inference/src/answer.rs": "6accc376fcf18e25106b4a3625b46c9b158e5f136d88fd1bfb1438595ba130d3",
-    "verifiable-inference/src/block_task.rs": "abb16e78603b6c01efec7e5a41677ae3589f302a1e0ac74a09aa681c410c2ee2",
-    "verifiable-inference/src/chain.rs": "28d45d2084ef825a79a36c95cabb5d9ad568413879b8d644fbeb1e1980c6cd96",
-    "verifiable-inference/src/chainkit.rs": "3bd0ae2bc4c4c8cc721560fa4bfacdeeb496f2384f2555147196c4e9378c2dec",
+    "verifiable-inference/src/attn.rs": "9bc7f54a2fcb0511d255e3b9352c387f3004e5862e257e4ab0019a2c2b11ffa1",
+    "verifiable-inference/src/attn_blocks.rs": "5862413d2b633bd47c5b7b1548f86726540858766ce798d450ac0a3d363203fa",
+    "verifiable-inference/src/block_task.rs": "fce944ce7f99c251c61c4f4a3c4e84dc0b1e2fc4fa4339001bd77f76dcb1a927",
+    "verifiable-inference/src/chain.rs": "21d0fe96b8f6e0b4a918414718a7df493f1e24685d7d3bc05f67eba331345738",
+    "verifiable-inference/src/chainkit.rs": "0fc0ec10135a778d56280fa69b9ee0816fb82b043a0cceb2c25f0c9c5708eb21",
     "verifiable-inference/src/dot.rs": "30e4226cd1e2908ed20abcdded182e24fdc81e0778bc3757674f9cf4b44613ab",
     "verifiable-inference/src/draw.rs": "188615bb6448e14047e4fb81b1d3b18f50595521001f36d03ecdaaa8a9e0324e",
     "verifiable-inference/src/f16.rs": "4c9cc44a80c643d1e93f344aac23f6baa5811089624f650171ced6745823bdf7",
-    "verifiable-inference/src/lib.rs": "0cadd530a44b59490a415ca6172a455bffd5602ec814ef44ffa0e02df7999634",
-    "verifiable-inference/src/manifest.rs": "ac96f50930ae88c04be178ef178297c09e2436d5c7c67723f7e3a22f2e0779ee",
-    "verifiable-inference/src/merkle.rs": "8bce6266f139d23adebcb2ffb5fc6450ce2ffff17efd6bd1eb65ecc46d890d5c",
-    "verifiable-inference/src/opening.rs": "6aab463eadc19c1030868ec768caf639b40c748b1538bd7b78bd503e62d0b957",
-    "verifiable-inference/src/prefix.rs": "c0b4aef0efca5d01c01b1313a34e2d4be56588f52ead45ee4eb87b004c9de8ef",
-    "verifiable-inference/src/q8.rs": "0ca99bb235b28ce1499ca54e0f1a8f00f7be2bc04ce9a80bd8cf4685bd1c0c10",
+    "verifiable-inference/src/lib.rs": "f920278e0435153623bd548ad79ef5ebe1c0358db50603253184144182eccb2b",
+    "verifiable-inference/src/manifest.rs": "cb42cf8d2729776d31cda679748d160535339814253f6dfb070e6e011b3614a0",
+    "verifiable-inference/src/merkle.rs": "41fd0b2a7914d8649d663f5ac2c28ead2e9201da82b03d194438f4c064d9c813",
+    "verifiable-inference/src/opening.rs": "697dfc60786eb139f64fe0cdb2f7029c10d8a248ed5299b19d21120ca7ad8fe3",
+    "verifiable-inference/src/prefix.rs": "1ef5cd2419ef2c3aaea825d3056b58557114520b4966012d2beba009b07b940f",
+    "verifiable-inference/src/q8.rs": "36366b1372a0a81b7e069bbab453b4228af4b0301e7724d7b62901759e2fd305",
     "verifiable-inference/src/quant.rs": "45e11073da42b30810386bf447cb27bad525ddf41e7278d2059ac569daf9f4b6",
-    "verifiable-inference/src/shape.rs": "94f7e7cf44dbf9c5f16c667ce931b1ebaff723a7acbaf742222868aafdd5be78",
-    "verifiable-inference/src/testkit.rs": "5dd10d9fb05133dbe1f4c2f0ae0e3997a4fd5e31597e4f084eba2c78400bc9f9",
-    "verifiable-inference/src/verify.rs": "2446e1a6be35ad9df98f92ad33403b4078fdcc38573f060b0000bc93fb3df252"
+    "verifiable-inference/src/recur.rs": "d2a5bc1f0a8462fc71582edb22c2ceab7164823c65ae14bd3813943dae067be0",
+    "verifiable-inference/src/seq.rs": "c0f12fc9290992f8fc17e13d9b52083c3aae44039be4a983c2e4c5ace3610ec7",
+    "verifiable-inference/src/shape.rs": "ba7d299b542714ad3fe2d7818b397aa50ce70841d99e70ba699bbdada7f47676",
+    "verifiable-inference/src/support.rs": "985fcddc9575270aee86bcc353db02570c28305ee920fba461623b756ae5ee75",
+    "verifiable-inference/src/testkit.rs": "0d8cc8cb3e9db3a951cc613655994d425168078563f24e444de7ecb034d2e60b",
+    "verifiable-inference/src/verify.rs": "26ad3a9277d8ae60c027863259518fb0641158003faaabd41dae2083b54aab5a"
   },
-  "local_patches": {
-    "src/lib.rs": {
-      "purpose": "Expose upstream testkit/chainkit to bridge CPU fixtures; no verifier algorithm changes",
-      "sha256": "7fd4f037f4b6acc06d45f026c62e626660f7a71f6afafda2f69f301b82755634"
-    },
-    "Cargo.toml": {
-      "purpose": "Expose upstream testkit/chainkit to bridge CPU fixtures; no verifier algorithm changes",
-      "sha256": "3b9d2cbd6468ae3eca412cfd1fc71d98e8d3e2c6c5fadfa08808050404005b03"
-    }
+  "local_patches": {},
+  "node_commit": "b13faafee0a56ca9d77545a18469abd599a5db2d",
+  "node_comparison": {
+    "reference": "b13faafee0a56ca9d77545a18469abd599a5db2d",
+    "matching_source_files": 22,
+    "miner_ahead_files": [],
+    "note": "All 22 vendored Rust source files match node Git blobs; testkit visibility is now upstream. Cargo package metadata retains its standalone miner adaptation. Source equality does not certify H15 live acceptance."
   }
 }

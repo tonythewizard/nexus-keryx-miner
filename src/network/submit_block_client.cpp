@@ -57,7 +57,7 @@ std::shared_ptr<grpc::Channel> connect(const std::string &endpoint,
 }
 
 protowire::KaspadResponse exchange(const std::string &endpoint,
-                                  protowire::KaspadRequest request,
+                                  const protowire::KaspadRequest &request,
                                   std::chrono::system_clock::time_point deadline) {
   auto channel = connect(endpoint, deadline);
   auto stub = protowire::RPC::NewStub(channel);

@@ -1,3 +1,4 @@
+#include "keryx/nexus/protocol_rules.hpp"
 #include "keryx/nexus/platform/io.hpp"
 #include "keryx/nexus/platform/windows_device_lease.hpp"
 #include "keryx/nexus/developer_config.hpp"
@@ -37,6 +38,7 @@
 #include "keryx/nexus/network/worker_mode.hpp"
 #include "keryx/nexus/network/submit_block_client.hpp"
 #include "keryx/nexus/ai_response_service.hpp"
+#include "keryx/nexus/h15_audit_client.hpp"
 #include "keryx/nexus/escrow_watcher.hpp"
 #include "keryx/nexus/escrow_claim_policy.hpp"
 #include "keryx/nexus/strike_monitor.hpp"
@@ -460,7 +462,7 @@ std::unique_ptr<opoi::StockLlamaRuntime> initialize_inference(
 
 std::future<void> start_chain_observation(network::SubmitBlockClient &client,
     network::SubmitBlockResult result) {
-    return std::async(std::launch::async,[&client,result]{try {
+    return std::async(std::launch::async,[&client,result=std::move(result)]{try {
                 const auto chain=client.observe_chain(result,std::chrono::seconds(30),
                     std::chrono::seconds(2),6);
                 std::osyncstream(std::cout)<<"LIVE_CHAIN_STATUS state="<<network::submission_state_name(chain.state)
@@ -624,9 +626,8 @@ int main(int argc,char **argv) {
                      "GetCurrentNetwork/GetInfo did not report synced mainnet");
       return 78;
     }
-    // The pinned official mainnet rules have H15 disabled. A node upgrade must
-    // be reviewed against its actual activation rules before this workflow can
-    // advertise service; text-only Vulkan generation is not canonical tracing.
+    // Node-version admission supplements the DAA-based H15 guard below;
+    // text-only Vulkan generation is not canonical tracing.
     if(primary_vulkan&&node.version!="1.6.4")
       throw std::runtime_error("Vulkan AI requires reviewed mainnet protocol rules for the node version; no CUDA fallback");
     startup.record("NODE_SYNC", StartupResult::Pass,
@@ -697,7 +698,13 @@ int main(int argc,char **argv) {
     const char *ipfs_env=std::getenv("NEXUS_IPFS_API_URL");
     const std::string ipfs_api=ipfs_env&&*ipfs_env?ipfs_env:"http://127.0.0.1:5001";
     std::unique_ptr<ai::AiResponseService> ai_response_service;
+    const bool native_h15_route=shared_runtime&&shared_runtime->abi_version()==9&&!vulkan_ai_config&&!primary_vulkan
+#ifdef NEXUS_ENABLE_SECONDARY_VULKAN
+      &&!secondary_pom_enabled
+#endif
+      ;
     ai::AiResponseTransport ai_response_transport(endpoint);
+    std::unique_ptr<ai::H15AuditClient> h15_audits;
     try {
       // Omitted windowDaa asks the node for its current exact service-eligibility window;
       // widening this to the API maximum would admit miners who are not in the active cohort.
@@ -726,6 +733,7 @@ int main(int argc,char **argv) {
                     ? std::to_string(*service_rpc.strikes.suspended_until_daa) : "null") << "}\n" << std::flush;
       if (listing == ai::ProviderListingStatus::Unknown)
         throw std::runtime_error("authoritative GetServiceProviders snapshot unavailable: " + service_rpc.providers_error);
+      if(!native_h15_route)protocol::require_legacy_worker_era("mainnet", service_rpc.providers_virtual_daa);
       std::cout << "PROVIDER_LISTED=" << listing_text
                 << " meaning=current selected-chain cohort; AiRequest assignment remains cohort-gated\n" << std::flush;
     } catch (const std::exception &e) {
@@ -764,7 +772,10 @@ int main(int argc,char **argv) {
                      "public response publisher must use explicitly configured local IPFS API");
       return 78;
     }
-    ai::AiResponseConfig ai_config;ai_config.escrow_secret=escrow_secret;ai_config.escrow_pubkey=escrow_pubkey;
+    model::SparseMerkleIndex merkle(gguf,tree_path);
+    if(native_h15_route)h15_audits=std::make_unique<ai::H15AuditClient>(*shared_runtime,gguf,merkle,
+        developer_data_root()/"state"/"ai-service"/"h15",escrow_secret,endpoint,official_model);
+    ai::AiResponseConfig ai_config;ai_config.native_h15=bool(h15_audits)&&h15_audits->ready();ai_config.escrow_secret=escrow_secret;ai_config.escrow_pubkey=escrow_pubkey;
     ai_config.delegation_signature=delegation;ai_config.model_id=official_model;ai_config.payout_address=pay;
     ai_config.service_identity=*service_identity;ai_config.network="mainnet";ai_config.tier=0;
     ai_config.private_inline_activation_daa=ai::mainnet_private_inference_gate_daa;
@@ -917,7 +928,6 @@ int main(int argc,char **argv) {
     }
 
     const auto tile_count=gguf.chunk_count()/32;
-    model::SparseMerkleIndex merkle(gguf,tree_path);
     std::unique_ptr<CudaWalkEngine> engine;
     std::unique_ptr<CudaResidentSearch> resident;
 #ifdef NEXUS_ENABLE_SECONDARY_VULKAN
@@ -1042,6 +1052,12 @@ int main(int argc,char **argv) {
       return answer;
     };
 #endif
+    if(h15_audits)h15_audits->set_gpu_owner([&](const std::function<void()>&work){
+#ifdef NEXUS_ENABLE_SECONDARY_VULKAN
+      SecondaryLanePause pause(secondary_lane.get());
+#endif
+      gpu_ownership.run_opoi([&]{resident.reset();engine.reset();},[&]{work();return true;},[]{});
+    });
     std::atomic_bool ai_queue_overflow{false};
     std::atomic_uint64_t ai_current_daa{service_rpc.providers_virtual_daa};
 
@@ -1073,6 +1089,10 @@ int main(int argc,char **argv) {
       std::string parse_error;
       const auto parsed_request = ai::parse_request(request.transaction, request.daa, &parse_error, "mainnet");
       if (!parsed_request) throw std::runtime_error("AiRequest changed or failed official parsing before service");
+      if(h15_audits){const auto prompt_size=ai::stock_request_prompt_size(request.transaction,escrow_secret);
+        h15_audits->advance(ai_current_daa.load(),h15_audits->estimate_next_work(prompt_size.value_or(1U<<20),parsed_request->max_tokens));
+        h15_audits->submit_due(ai_current_daa.load(),ai_responses_enabled);
+      }
       ai::AiResponseEffects effects;
       effects.phase_timing=record_phase;
       effects.assigned=[&](std::string_view request_id) {
@@ -1119,6 +1139,15 @@ int main(int argc,char **argv) {
             }
           });
       };
+      if(h15_audits){
+        effects.infer_traced=[&](std::string_view prompt,std::uint32_t tokens,const std::array<std::uint8_t,32>&hash){
+          telemetry.set_state("PAUSED","RUNNING","H15_TRACE",submit_enabled?"ARMED":"DISABLED");
+          return gpu_ownership.run_opoi([&]{resident.reset();engine.reset();},
+              [&]{return h15_audits->infer(prompt,tokens,hash);},[]{});
+        };
+        effects.recover_traced=[&](const Hash &request){return h15_audits->response_for_request(request);};
+        effects.persist_trace=[&](std::string_view id,std::span<const std::uint8_t>payload,std::uint64_t daa,std::uint64_t deadline){h15_audits->commit(id,payload,daa,deadline);};
+      }
       effects.publish_and_readback=[&](std::span<const std::uint8_t> body) {
         return ai::ipfs_publish_and_readback(ipfs_api,body);
       };
@@ -1127,13 +1156,17 @@ int main(int argc,char **argv) {
         if(!ai_responses_enabled)
           return ai::AiResponseEffects::SubmitResult{ai::AiResponseEffects::SubmitResult::State::Rejected,
               "AiResponse transaction authorization is disabled"};
-        return ai_response_transport.submit(tx,txid);
+        if(h15_audits)h15_audits->response_intent(txid);
+        const auto result=ai_response_transport.submit(tx,txid);
+        if(h15_audits)h15_audits->response_result(txid,result.state==ai::AiResponseEffects::SubmitResult::State::Rejected);
+        return result;
       };
       effects.reconcile=[&](std::string_view txid) {
         return ai_response_transport.known(txid);
       };
       effects.current_daa=[&] { return ai_current_daa.load(std::memory_order_acquire); };
       effects.wait_before_retry=[&](std::uint32_t milliseconds) {
+        if(h15_audits){h15_audits->poll();h15_audits->advance(ai_current_daa.load(),milliseconds/100);h15_audits->submit_due(ai_current_daa.load(),ai_responses_enabled);}
         const auto until=std::chrono::steady_clock::now()+std::chrono::milliseconds(milliseconds);
         while(!stop.load(std::memory_order_acquire)&&std::chrono::steady_clock::now()<until)
           std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -1402,6 +1435,7 @@ int main(int argc,char **argv) {
              <<" known_pending="<<ai_requests.size()<<" before_pom=true\n"<<std::flush;
     // Serve every known startup obligation before opening the PoM admission gate.
     while(auto request=ai_requests.pop()) serve_ai_request(std::move(*request));
+    if(h15_audits){h15_audits->poll();h15_audits->advance(ai_current_daa.load());h15_audits->submit_due(ai_current_daa.load(),ai_responses_enabled);}
     if(ai_queue_overflow.load(std::memory_order_acquire))
       throw std::runtime_error("startup AiRequest queue overflow; PoM remains disabled");
     if(primary_pom_enabled && !primary_vulkan && !gpu_ownership.run_pom([&]{
@@ -1457,7 +1491,7 @@ int main(int argc,char **argv) {
     // Keep one decoded RPC snapshot. Compare the complete wire bytes, not only
     // the generation: duplicate refreshes can replace the RPC envelope.
     PreparedRpcTemplateCache template_cache;
-    bool startup_parity_verified=false;
+    bool startup_parity_verified=false;std::optional<bool> parity_v5;
     bool primary_selection_paused=false;
     startup.record("MINING", StartupResult::Pass, "productive PoM admission enabled");
     if (!startup.mining_allowed())
@@ -1470,7 +1504,14 @@ int main(int argc,char **argv) {
 #endif
       if(ai_queue_overflow.load(std::memory_order_acquire))
         throw std::runtime_error("AiRequest discovery queue overflow; stopping PoM to preserve service obligations");
-      while(auto request=ai_requests.pop()) serve_ai_request(std::move(*request));
+      if(h15_audits)h15_audits->poll();
+      while(auto request=ai_requests.pop()) {
+        serve_ai_request(std::move(*request));
+      }
+      if(h15_audits){
+        h15_audits->advance(ai_current_daa.load());h15_audits->submit_due(ai_current_daa.load(),ai_responses_enabled);
+        if(h15_audits->restoring()){telemetry.set_state("PAUSED","IDLE","H15_CHAIN_RESTORE",submit_enabled?"ARMED":"DISABLED");std::this_thread::sleep_for(std::chrono::milliseconds(20));continue;}
+      }
       {std::lock_guard lock(chain_observers_mutex);
         std::erase_if(chain_observers,[](auto &f){if(f.wait_for(std::chrono::seconds(0))==std::future_status::ready){f.get();return true;}return false;});}
       const auto wait_start_ns=monotonic_ns();
@@ -1489,6 +1530,9 @@ int main(int argc,char **argv) {
         require_mining_eligible(job.fields);
         if(!job.lease.valid()) continue;
         const auto &block=template_cache.block(job.fields.response_wire);
+        if(!h15_audits)protocol::require_legacy_worker_era("mainnet", block.header().daascore());
+        const bool v5=block.header().daascore()>=pom_v5_activation_daa;
+        if(parity_v5!=v5){startup_parity_verified=false;parity_v5=v5;}
         if(job.fields.pay_address!=pay||!opoi::valid_coinbase_extra_data(job.fields.extra_data,extra))
           throw std::runtime_error("queued job payout/escrow request binding changed");
         const auto &prepared_template=template_cache.get(job.fields.response_wire);
@@ -1617,6 +1661,9 @@ int main(int argc,char **argv) {
 #endif
         telemetry.set_gpu_activity("CUDA_RESIDENT_SEARCH");
         const bool searched=live_selection->allows(LiveGpuSelection::Nvidia,primary_selection_token)&&gpu_ownership.run_pom([&]{
+          // v5 pad shares VRAM with the model, not the full inference KV cache.
+          // Ownership is drained here; the next AI call releases the pad first.
+          if(v5)shared_runtime->use_task_context();
           if(!resident) {
             resident=std::make_unique<CudaResidentSearch>(std::string(gpu_uuid),gguf,shared_runtime->resident_tensors());
             cuda_engine_initializations.fetch_add(1,std::memory_order_relaxed);
@@ -1627,11 +1674,15 @@ int main(int argc,char **argv) {
             telemetry.set_state("ACTIVE","IDLE","",submit_enabled?"ARMED":"DISABLED");
             primary_selection_paused=false;
           }
+          if(v5){
+            const auto pad=official_v5_pad(header.pom_tier,official_model,official_root);
+            if(!resident->v5_ready_for(pad)&&!resident->prepare_v5(pad,[&]{return stop.load()||ai_requests.size()!=0||gpu_ownership.opoi_pending()||!live_selection->allows(LiveGpuSelection::Nvidia,primary_selection_token);}))return;
+          }else if(resident->v5_pad_bytes())resident->release_v5();
           telemetry.work_launched(batch_count);
           search=resident->run(pph,header.timestamp,header.daa_score,target.little_endian,batch_start,batch_count);
           telemetry.work_completed(search.completed*walk_steps,search.completed);
         });
-        if(!searched)continue;
+        if(!searched||search.completed==0)continue;
         telemetry.record_search_host(preparation_end_ns-preparation_start_ns,refresh_end_ns-preparation_end_ns);
         nonce_cursor+=search.completed;
         completed+=search.completed;
@@ -1650,6 +1701,52 @@ int main(int argc,char **argv) {
         const auto winning_nonce=search.winner.value_or(batch_start);
         std::cout<<(expected_winner?"LIVE_RESIDENT_TARGET=FOUND generation=":"LIVE_RESIDENT_PARITY=SAMPLE generation=")<<job.generation<<" nonce="<<winning_nonce
                  <<" completed="<<search.completed<<" kernel_ms="<<search.kernel_ms<<" rust_verification=PENDING\n"<<std::flush;
+        if(v5) {
+          const auto pad=official_v5_pad(header.pom_tier,official_model,official_root);
+          const auto seed=block_seed(pph,header.timestamp,winning_nonce,header.daa_score);
+          const auto binding=bind_candidate(job,winning_nonce,header.timestamp,pph);
+          const auto built=prove_v5_from_model(seed,header.pom_tier,tile_count,pad,[&](std::uint64_t tile){
+            if(stop.load()||gpu_ownership.opoi_pending())throw PrefetchCancelled("H15 witness preempted");
+            std::array<std::uint8_t,tile_bytes> bytes;gguf.read_tile_into(tile,bytes);return bytes;
+          },[&](std::uint64_t tile){return merkle.tile_path(tile);});
+          Walk diagnostic;const bool diagnosed=gpu_ownership.run_pom([&]{
+            if(!resident||!resident->v5_ready_for(pad))throw std::runtime_error("H15 pad was released during witness");
+            diagnostic=resident->diagnose_v5(pph,header.timestamp,header.daa_score,winning_nonce);
+          });
+          if(!diagnosed)continue;
+          if(diagnostic.states!=built.walk.states||diagnostic.offsets!=built.walk.offsets)
+            throw std::runtime_error("H15 CUDA/independent CPU parity mismatch");
+          const auto final=final_state(built.walk);const auto pow=pom_pow_value_h3(final,pph);
+          const bool target_met=little_endian_leq(pow,target.little_endian);
+          if(target_met!=expected_winner)throw std::runtime_error("H15 GPU/CPU target decision mismatch");
+          const auto wire=borsh_v5_container(built.proof,final,pow);
+          const ProofArtifactContext context{seed,gguf.chunk_count(),header.timestamp,winning_nonce,header.daa_score,job.generation,final,header.pom_tier,official_root,target.little_endian,pph,response_digest,pow};
+          const auto artifacts=encode_proof_artifacts(context,built.walk,wire.size());
+          const auto name=safe_name(job.generation,winning_nonce);
+          const std::array<fs::path,3> paths{outdir/(name+".proof"),outdir/(name+".context"),outdir/(name+".trace")};
+          for(const auto &path:paths)if(fs::exists(path))throw std::runtime_error("H15 proof artifact already exists");
+          {std::ofstream f(paths[0],std::ios::binary);put(f,wire.data(),wire.size());}
+          {std::ofstream f(paths[1],std::ios::binary);put(f,artifacts.context_prefix.data(),artifacts.context_prefix.size());}
+          {std::ofstream f(paths[2],std::ios::binary);put(f,artifacts.trace.data(),artifacts.trace.size());}
+          const auto rust=rust_verifier.verify(artifacts.context_prefix,artifacts.trace,wire);
+          (void)rust; // Throws on rejection; failed artifacts remain available.
+          release_verified_nonwinner_artifacts(paths,true,target_met);
+          startup_parity_verified=true;telemetry.proof_completed();telemetry.proof_rust_verified();
+          std::cout<<"LIVE_H15_CUDA_NONCE=PASS nonce="<<winning_nonce<<" states=257 offsets=256 rust=PASS target_satisfied="<<(target_met?"true":"false")<<"\n"<<std::flush;
+          if(target_met){
+            telemetry.target_satisfied();
+            if(submit_enabled&&candidate_matches_job(binding,job)&&job.lease.valid()&&!stop.load()&&ai_requests.size()==0&&!gpu_ownership.opoi_pending()&&live_selection->allows(LiveGpuSelection::Nvidia,primary_selection_token)&&queue.submission_allowed(job.generation)){
+              network::VerifiedSubmission verified;
+              verified.job_id=hex(response_digest.data(),response_digest.size());verified.generation=job.generation;verified.nonce=winning_nonce;
+              verified.pom_verified=verified.model_verified=verified.merkle_verified=verified.header_seed_verified=verified.target_satisfied=verified.job_fresh=verified.generation_matches=verified.miner_configured=true;
+              const std::string bytes(reinterpret_cast<const char*>(wire.data()),wire.size());
+              network::PomWinner winner{std::move(verified),header.daa_score,final,header.pom_tier,bytes};
+              const auto result=network::submit_pom_winner(*submit_client,block,winner,job.fields.pay_address,job.fields.extra_data,true);
+              std::cout<<"LIVE_H15_SUBMIT_RESULT state="<<network::submission_state_name(result.state)<<" hash="<<result.block_hash<<"\n"<<std::flush;observe_submission(result);
+            }
+          }
+          continue;
+        }
         std::optional<PreparedNonce> prefetched;
         auto prepare_nonce=[&](std::uint64_t nonce,bool lookahead)->PreparedNonce{
           PreparedNonce p;p.nonce=nonce;p.started_ns=monotonic_ns();auto phase=monotonic_ns();auto cpu_phase=thread_cpu_ns();

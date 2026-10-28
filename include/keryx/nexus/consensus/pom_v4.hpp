@@ -79,6 +79,10 @@ Hash hash_pair(const Hash &left, const Hash &right);
 Hash merkle_root(std::span<const std::uint8_t> blob);
 std::vector<std::uint8_t> make_reference_test_blob();
 Walk walk_v4(std::uint64_t seed, std::span<const std::uint8_t> blob);
+std::array<std::uint8_t, tile_bytes> v4_initial_state_bytes(std::uint64_t seed);
+void v4_transition_into(std::array<std::uint8_t, tile_bytes> &out,
+                        const std::array<std::uint8_t, tile_bytes> &state,
+                        const std::array<std::uint8_t, tile_bytes> &tile, std::uint32_t step);
 Hash v4_initial_state_hash(std::uint64_t seed);
 std::uint64_t final_state(const Walk &walk);
 std::uint64_t final_state_from_bytes(std::span<const std::uint8_t, 1024> bytes);

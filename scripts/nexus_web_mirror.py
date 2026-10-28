@@ -69,18 +69,20 @@ class WebMirror:
         return snapshot_for_model(model, gpu, tab, log_filter)
 
 
-def snapshot_for_model(model, gpu, tab, log_filter='ALL'):
+def snapshot_for_model(model, gpu, tab, log_filter='ALL', *, height=46, preferences=None, log_before=None):
     if type(tab) is not int or not 0 <= tab < len(TABS) or log_filter not in FILTERS:
         raise ValueError('Invalid page/filter')
-    frame = build_presenter_frame(46, 160, model, gpu, tab, log_filter)
-    native = model.native or {}
     from nexus_gpu_metrics import header_hashrate, summary
-    hashrate_label, hashrate = header_hashrate(model, gpu)
+    metrics = summary(model, gpu)
+    frame = build_presenter_frame(height, 160, model, gpu, tab, log_filter,
+                                  preferences=preferences, gpu_metrics=metrics, log_before=log_before)
+    native = model.native or {}
+    hashrate_label, hashrate = header_hashrate(model, gpu, metrics=metrics)
     return {'schema_version': 1, 'version': dashboard.RELEASE_VERSION,
             'tabs': TABS, 'tab': tab, 'status': model.native_status(),
             'network': model.network, 'synced': model.synced,
             'hashrate': dashboard.format_hashrate(hashrate), 'hashrate_label': hashrate_label,
-            'gpu_metrics': summary(model, gpu),
+            'gpu_metrics': metrics,
             'uptime': dashboard.uptime_text(model.snapshot()['uptime']),
             'memory': dashboard.host_memory(model), 'state': native.get('state', {}),
             'panels': frame.panels, 'updates': model.updates,

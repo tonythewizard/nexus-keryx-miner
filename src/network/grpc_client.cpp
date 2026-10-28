@@ -358,7 +358,7 @@ int run_client(const std::string &endpoint, const std::string &pay_address,
     std::uint64_t templates_received=0;
     std::uint64_t template_diagnostics_ns=0;
 
-    auto send = [&](Request request) {
+    auto send = [&](const Request &request) {
       if(!silence_watchdog.begin_wait()) throw std::runtime_error("gRPC stream silence limit reached");
       const bool written=stream->Write(request);
       const bool healthy=silence_watchdog.end_wait();
@@ -533,7 +533,7 @@ int run_client(const std::string &endpoint, const std::string &pay_address,
               job.fields = std::move(fields);
               job.generation = 0;
               std::cerr << "LIVE_JOB_INELIGIBLE network=" << network
-                        << " synced=" << (fields.node_synced ? "true" : "false")
+                        << " synced=" << (job.fields.node_synced ? "true" : "false")
                         << " queue_publish=BLOCKED submit=DISABLED\n";
             } else {
               const auto queued = live_queue->publish(fields);
@@ -849,7 +849,7 @@ AiBackfillScanResult run_ai_backfill_scan(
   constexpr std::uint64_t network_id = 1, info_id = 2, notify_id = 3, dag_id = 4, virtual_chain_id = 5;
   std::uint64_t next_id = 10;
   std::uint64_t watermark_dag_id = 0;
-  const auto send = [&](Request request) {
+  const auto send = [&](const Request &request) {
     if (!stream->Write(request)) throw std::runtime_error("AI backfill audit request write failed");
   };
   send(make_request("getCurrentNetworkRequest", network_id));
@@ -904,7 +904,7 @@ AiBackfillScanResult run_ai_backfill_scan(
     watcher_done.store(true, std::memory_order_release);
     if (cancel_watcher.joinable()) cancel_watcher.join();
   };
-  auto schedule_fetch = [&](std::string hash, bool backfill, unsigned attempts) {
+  auto schedule_fetch = [&](const std::string &hash, bool backfill, unsigned attempts) {
     if (hash.empty() || pending.size() >= options.max_inflight ||
         !in_flight_hashes.insert(hash).second) return false;
     const auto id = next_id++;

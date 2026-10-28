@@ -173,16 +173,18 @@ async fn snapshot(
     tab: u8,
     filter: String,
     height: u8,
+    log_before: Option<u64>,
 ) -> Result<Value, String> {
     if tab > 8
         || !(16..=46).contains(&height)
         || !["ALL", "AI", "SUBMIT", "JOB", "ERROR"].contains(&filter.as_str())
+        || log_before.is_some_and(|value| value > 9_007_199_254_740_991)
     {
         return Err("Invalid page/filter".into());
     }
     let frame = request(
         &app,
-        json!({"schema_version":1,"op":"snapshot","tab":tab,"filter":filter,"height":height}),
+        json!({"schema_version":1,"op":"snapshot","tab":tab,"filter":filter,"height":height,"log_before":log_before}),
         8,
     )
     .await?;
@@ -404,7 +406,7 @@ impl DesktopControl {
         if !(0..9).contains(&page) {
             return "{}".into();
         }
-        snapshot(self.0.clone(), page as u8, filter, 46)
+        snapshot(self.0.clone(), page as u8, filter, 46, None)
             .await
             .map(|v| v.to_string())
             .unwrap_or_else(|_| "{}".into())

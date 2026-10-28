@@ -95,3 +95,40 @@ test('GPU toggle uses explicit runtime lane rather than UUID/vendor heuristics',
  const [toggle]=sandbox.inlineActions({device_id:device.id},'Device enabled',frame);
  assert.equal(toggle.text,'ON');toggle.fn();assert.equal(calls[0][1].enabled,false);
 });
+
+test('history navigation pauses on a stable cursor without issuing concurrent requests',()=>{
+ const begin=source.indexOf('function selectLogPage('),end=source.indexOf('function panelNode(',begin);
+ let polls=0;
+ const sandbox={logBefore:null,layoutKey:'old',timer:1,busy:false,acting:false,clearTimeout(){},poll(){polls++;}};
+ vm.createContext(sandbox);vm.runInContext(source.slice(begin,end),sandbox);
+ sandbox.selectLogPage(140);assert.equal(sandbox.logBefore,140);assert.equal(sandbox.layoutKey,'');assert.equal(polls,1);
+ sandbox.busy=true;sandbox.selectLogPage(null);assert.equal(sandbox.logBefore,null);assert.equal(polls,1);
+});
+
+test('history controls expose older pages and scrolling freezes the live page',()=>{
+ const begin=source.indexOf('function panelNode('),end=source.indexOf('// Preserve buttons',begin);
+ const make=(tag,text,classes='')=>({tagName:tag,textContent:text,className:classes,children:[],classList:{add(){},remove(){}},append(...items){this.children.push(...items)}});
+ let polls=0;
+ const sandbox={make,button:(label,callback)=>({...make('button',label),onclick:callback}),tab:4,
+   logBefore:null,timer:1,busy:false,acting:false,clearTimeout(){},poll(){polls++;},selectLogPage(){}};
+ vm.createContext(sandbox);vm.runInContext(source.slice(begin,end),sandbox);
+ const panel={kind:'event-log',title:'LOG',table_columns:['TIME'],table_rows:[['fixture']],
+   log_history:{total:240,start:140,end:240,older_before:140,has_newer:false,newer_before:null,live:true}};
+ const card=sandbox.panelNode(panel,{desktop:{effective_view:'single'}},0);
+ const nav=card.children[1],rows=card.children[2];
+ assert.equal(nav.children[0].disabled,false);assert.equal(nav.children[1].disabled,true);assert.equal(nav.children[2].disabled,true);
+ rows.scrollHeight=1000;rows.clientHeight=200;rows.scrollTop=800;rows.onscroll();assert.equal(sandbox.logBefore,null);
+ rows.scrollTop=200;rows.onscroll();assert.equal(sandbox.logBefore,240);assert.equal(polls,1);
+ rows.onscroll();assert.equal(polls,1);
+});
+
+test('history RPC carries its cursor and discards frames for a page the user left',async()=>{
+ const begin=source.indexOf('async function poll()'),end=source.indexOf('window.addEventListener("resize"',begin);
+ let resolve,rendered=0,request;
+ const sandbox={busy:false,acting:false,tab:4,filter:'SUBMIT',logBefore:140,logSession:'',layoutKey:'ready',timer:null,
+  $:()=>({clientHeight:800}),invoke:(name,args)=>{request=args;return new Promise(done=>{resolve=done;});},
+  render(){rendered++;},document:{hidden:false,body:{classList:{add(){}}}},text(){},setTimeout(){return 1;}};
+ vm.createContext(sandbox);vm.runInContext(source.slice(begin,end),sandbox);
+ let pending=sandbox.poll();assert.equal(request.logBefore,140);resolve({panels:[]});await pending;assert.equal(rendered,1);
+ pending=sandbox.poll();sandbox.logBefore=40;resolve({panels:[]});await pending;assert.equal(rendered,1);
+});

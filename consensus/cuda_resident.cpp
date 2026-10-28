@@ -32,6 +32,12 @@ struct Buffer {CUdeviceptr ptr{};CUcontext context{};
   ~Buffer(){if(ptr){cuCtxSetCurrent(context);cuMemFree(ptr);}}
   void allocate(std::size_t n){check(cuCtxGetCurrent(&context),"allocation context");check(cuMemAlloc(&ptr,n),"resident cuMemAlloc");}
 };
+struct V5Resources {
+  V5PadSpec spec;
+  Buffer pad,bases,prefix,lut;
+  std::uint32_t tensor_count{},pad_steps{};
+  std::uint64_t reciprocal{};
+};
 struct Resources {CUcontext context{};CUmodule module{};CUstream stream{};CUevent begin{},end{};
   ~Resources(){if(context)cuCtxSetCurrent(context);if(stream)cuStreamSynchronize(stream);if(begin)cuEventDestroy(begin);if(end)cuEventDestroy(end);if(stream)cuStreamDestroy(stream);if(module)cuModuleUnload(module);}
 };
@@ -42,7 +48,9 @@ struct CudaResidentSearch::Impl {
   std::vector<Buffer> uploads;
   Buffer bases,prefix,lut,winner,sponge,h10_seeds,tile_folds,witness_offsets,witness_pairs;
   ResidentWitnessTiles host_witness; // One bounded staging buffer; released with PoM on AI preemption.
+  std::unique_ptr<V5Resources> v5;
   Resources resources;
+  CUfunction v5_kernel{},pad_fill_kernel{};
   CUfunction kernel{},seed_kernel{},fold_kernel{},witness_offsets_kernel{},witness_pairs_kernel{};
   std::uint32_t tensor_count{},shift{12};
   std::uint64_t tiles{},reciprocal{};
@@ -61,7 +69,7 @@ struct CudaResidentSearch::Impl {
     check(cuCtxSetCurrent(ctx.value),"bind shared primary context");resources.context=ctx.value;
     const auto &canonical=gguf.canonical_tensors();
     if(tensors.size()!=canonical.size()||tensors.empty()||tensors.size()>65535)throw std::runtime_error("canonical resident tensor count mismatch");
-    std::vector<std::uint64_t> host_bases,host_prefix{0};
+    std::vector<std::uint64_t> host_bases,host_offsets,host_prefix{0};
     std::size_t host_uploaded=0,borrowed=0;
     for(std::size_t i=0;i<tensors.size();++i){const auto &t=tensors[i];const auto &g=canonical[i];
       if(t.name!=g.name||t.bytes!=g.bytes||!t.address)throw std::runtime_error("resident tensor name/size mismatch");
@@ -80,19 +88,20 @@ struct CudaResidentSearch::Impl {
         uploads.emplace_back();uploads.back().allocate(t.bytes);ptr=uploads.back().ptr;
         check(cuMemcpyHtoD(ptr,reinterpret_cast<const void*>(t.address),t.bytes),"upload CPU resident tensor");host_uploaded+=t.bytes;
       }
-      host_bases.push_back(ptr);host_prefix.push_back(host_prefix.back()+chunks);
+      host_bases.push_back(ptr);host_offsets.push_back(gguf.tensor_data_offset()+g.data_offset);host_prefix.push_back(host_prefix.back()+chunks);
     }
-    if(host_prefix.back()!=gguf.chunk_count()||host_prefix.back()%32)throw std::runtime_error("canonical resident chunk count mismatch");
+    if(host_prefix.back()!=gguf.chunk_count()||host_prefix.back()<32)throw std::runtime_error("canonical resident chunk count mismatch");
     canonical_bases=host_bases;canonical_prefix=host_prefix;
     tensor_count=static_cast<std::uint32_t>(host_bases.size());tiles=host_prefix.back()/32;
     reciprocal=std::numeric_limits<std::uint64_t>::max()/tiles;
     // Verify canonical bytes at EVERY tensor boundary and 129 deterministic samples.
+    platform::ReadOnlyFile canonical_file(gguf.path());
     auto compare_chunk=[&](std::uint64_t chunk){
       const auto j=static_cast<std::size_t>(std::upper_bound(host_prefix.begin(),host_prefix.end(),chunk)-host_prefix.begin()-1);
-      std::array<std::uint8_t,32> gpu{};std::array<std::uint8_t,1024> tile{};
+      std::array<std::uint8_t,32> gpu{},expected{};
       check(cuMemcpyDtoH(gpu.data(),host_bases[j]+(chunk-host_prefix[j])*32,32),"resident byte gate");
-      gguf.read_tile_into(chunk/32,tile);
-      if(!std::equal(gpu.begin(),gpu.end(),tile.begin()+static_cast<std::ptrdiff_t>((chunk%32)*32)))throw std::runtime_error("resident canonical bytes do not match official GGUF");
+      canonical_file.read_at(expected.data(),expected.size(),host_offsets[j]+(chunk-host_prefix[j])*32);
+      if(gpu!=expected)throw std::runtime_error("resident canonical bytes do not match official GGUF");
     };
     for(std::size_t j=0;j<host_bases.size();++j){compare_chunk(host_prefix[j]);compare_chunk(host_prefix[j+1]-1);}
     for(std::uint64_t i=0;i<129;++i)compare_chunk((i*(host_prefix.back()-1))/128);
@@ -103,6 +112,8 @@ struct CudaResidentSearch::Impl {
     bases.allocate(host_bases.size()*8);prefix.allocate(host_prefix.size()*8);lut.allocate(host_lut.size()*2);winner.allocate(8);sponge.allocate(25*8);h10_seeds.allocate(18432*8);
     check(cuMemcpyHtoD(bases.ptr,host_bases.data(),host_bases.size()*8),"copy tensor descriptors");check(cuMemcpyHtoD(prefix.ptr,host_prefix.data(),host_prefix.size()*8),"copy canonical prefix");check(cuMemcpyHtoD(lut.ptr,host_lut.data(),host_lut.size()*2),"copy chunk LUT");
     check(cuModuleLoadData(&resources.module,_binary_nexus_resident_cubin_start),"load resident SM86 cubin");check(cuModuleGetFunction(&kernel,resources.module,"nexus_resident_search_preseeded"),"resident kernel entry point");
+    check(cuModuleGetFunction(&v5_kernel,resources.module,"nexus_resident_search_v5"),"v5 resident kernel entry point");
+    check(cuModuleGetFunction(&pad_fill_kernel,resources.module,"nexus_v5_pad_fill"),"v5 pad fill entry point");
     check(cuModuleGetFunction(&seed_kernel,resources.module,"nexus_h10_seeds"),"H10 seed entry point");
     check(cuModuleGetFunction(&fold_kernel,resources.module,"nexus_tile_folds"),"immutable tile fold entry point");
     check(cuModuleGetFunction(&witness_offsets_kernel,resources.module,"nexus_witness_offsets"),"witness offsets entry point");
@@ -120,6 +131,7 @@ struct CudaResidentSearch::Impl {
     check(cuStreamSynchronize(resources.stream),"complete immutable tile folds");
     // Check folds at every tensor boundary plus dispersed deterministic samples.
     auto verify_fold=[&](std::uint64_t tile){
+      if(tile>=tiles)return; // incomplete canonical tail is committed but never walked
       std::array<std::uint8_t,tile_bytes> bytes{};gguf.read_tile_into(tile,bytes);
       std::uint64_t expected=0,actual=0;
       for(unsigned wd=0;wd<8;++wd){std::uint64_t word=0;for(unsigned j=0;j<4;++j)word|=std::uint64_t(bytes[wd*4+j])<<(8*j);expected=mix64(expected^word);}
@@ -184,6 +196,7 @@ ResidentWitnessTiles CudaResidentSearch::read_witness_tiles(std::uint64_t seed) 
 }
 void CudaResidentSearch::read_witness_tiles_into(std::uint64_t seed, ResidentWitnessTiles &result) {
   auto &p=*impl_;
+  if(p.v5)throw std::logic_error("v4 fold-only witness reconstruction is invalid for v5; use the full state walk");
   check(cuCtxSetCurrent(p.ctx.value),"bind witness gather context");
   result.pairs.resize(walk_steps);
   void *offset_params[]={&seed,&p.tiles,&p.reciprocal,&p.tile_folds.ptr,&p.witness_offsets.ptr};
@@ -206,26 +219,109 @@ bool CudaResidentSearch::diagnostic_headroom_available() const {
   // cache (256 KiB), bounded staging/trace and module overhead.
   return free>=264ULL*1024*1024;
 }
-ResidentSearchResult CudaResidentSearch::run(const Hash &pph,std::uint64_t timestamp,std::uint64_t daa,const Hash &target,std::uint64_t start,std::uint64_t count,const std::function<void(bool)> &after_enqueue){
+bool CudaResidentSearch::v5_ready_for(const V5PadSpec&spec) const noexcept {
+  return impl_->v5 && impl_->v5->spec==spec;
+}
+std::uint64_t CudaResidentSearch::v5_pad_bytes() const noexcept {
+  return impl_->v5?impl_->v5->spec.tiles*tile_bytes:0;
+}
+void CudaResidentSearch::release_v5() {
+  auto&p=*impl_;check(cuCtxSetCurrent(p.ctx.value),"bind v5 release context");
+  check(cuStreamSynchronize(p.resources.stream),"drain v5 before AI release");p.v5.reset();
+}
+bool CudaResidentSearch::prepare_v5(const V5PadSpec&spec,const std::function<bool()>&cancelled) {
+  auto&p=*impl_;
+  release_v5(); // a cancelled rebuild must never leave a previous seed's pad usable
+  const auto steps=v5_pad_steps(p.tiles,spec.tiles);
+  if(spec.tiles>std::numeric_limits<std::size_t>::max()/tile_bytes)throw std::length_error("v5 pad allocation size overflow");
+  if(cancelled&&cancelled())return false;
+  const auto bytes=static_cast<std::size_t>(spec.tiles)*tile_bytes;
+  std::size_t free=0,total=0;check(cuMemGetInfo(&free,&total),"v5 VRAM admission");
+  constexpr std::size_t reserve=64ULL*1024*1024;
+  const auto chunks=(p.tiles+spec.tiles)*32;
+  const auto lut_entries=static_cast<std::size_t>(((chunks-1)>>p.shift)+1);
+  const auto metadata_bytes=(p.canonical_bases.size()+2)*16+lut_entries*2;
+  if(free<reserve || metadata_bytes>free-reserve || bytes>free-reserve-metadata_bytes)
+    throw std::runtime_error("v5 context pad does not fit: needs "+std::to_string(bytes)+" bytes plus metadata and reserve; free="+std::to_string(free));
+  auto next=std::make_unique<V5Resources>();next->spec=spec;next->pad_steps=steps;
+  next->reciprocal=UINT64_MAX/spec.tiles;
+  next->pad.allocate(bytes);
+  const auto words=v5_pad_seed_words(spec.seed);
+  const auto entries=spec.tiles*32;
+  // Each slice fills at most 2 MiB. Synchronize only this stream before checking
+  // cancellation; partial contents are never published as a ready context pad.
+  constexpr std::uint64_t slice_entries=65536;
+  for(std::uint64_t first=0;first<entries;first+=slice_entries){
+    if(cancelled&&cancelled())return false;
+    auto count=std::min(slice_entries,entries-first);
+    void*args[]={&next->pad.ptr,&first,&count,const_cast<std::uint64_t*>(&words[0]),const_cast<std::uint64_t*>(&words[1]),const_cast<std::uint64_t*>(&words[2]),const_cast<std::uint64_t*>(&words[3])};
+    check(cuLaunchKernel(p.pad_fill_kernel,static_cast<unsigned>((count+127)/128),1,1,128,1,1,0,p.resources.stream,args,nullptr),"fill v5 pad slice");
+    check(cuStreamSynchronize(p.resources.stream),"complete v5 pad slice");
+  }
+  if(cancelled&&cancelled())return false;
+  std::vector<std::uint64_t>bases,prefix{0};const auto cap=p.tiles*32;
+  for(std::size_t j=0;j<p.canonical_bases.size()&&p.canonical_prefix[j]<cap;++j){bases.push_back(p.canonical_bases[j]);prefix.push_back(std::min(cap,p.canonical_prefix[j+1]));}
+  if(prefix.back()!=cap||bases.size()>=65535)throw std::runtime_error("invalid v5 canonical weight prefix");
+  bases.push_back(next->pad.ptr);prefix.push_back(chunks);
+  next->tensor_count=static_cast<std::uint32_t>(bases.size());
+  std::vector<std::uint16_t>lut(lut_entries);
+  for(std::size_t j=0;j<lut_entries;++j)lut[j]=static_cast<std::uint16_t>(std::upper_bound(prefix.begin(),prefix.end(),std::uint64_t(j)<<p.shift)-prefix.begin()-1);
+  next->bases.allocate(bases.size()*8);next->prefix.allocate(prefix.size()*8);next->lut.allocate(lut.size()*2);
+  check(cuMemcpyHtoD(next->bases.ptr,bases.data(),bases.size()*8),"v5 weight/pad descriptors");
+  check(cuMemcpyHtoD(next->prefix.ptr,prefix.data(),prefix.size()*8),"v5 weight/pad prefix");
+  check(cuMemcpyHtoD(next->lut.ptr,lut.data(),lut.size()*2),"v5 weight/pad LUT");
+  if(cancelled&&cancelled())return false;
+  p.v5=std::move(next);
+  return true;
+}
+std::array<std::uint8_t,tile_bytes> CudaResidentSearch::read_v5_pad_tile(std::uint64_t tile) {
+  auto&p=*impl_;if(!p.v5||tile>=p.v5->spec.tiles)throw std::out_of_range("v5 pad is not ready or tile outside pad");
+  check(cuCtxSetCurrent(p.ctx.value),"bind v5 pad read context");
+  std::array<std::uint8_t,tile_bytes>out{};check(cuMemcpyDtoH(out.data(),p.v5->pad.ptr+tile*tile_bytes,tile_bytes),"read bounded v5 pad sample");return out;
+}
+Walk CudaResidentSearch::diagnose_v5(const Hash&pph,std::uint64_t timestamp,std::uint64_t daa,std::uint64_t nonce) {
+  if(!impl_->v5)throw std::logic_error("v5 pad is not ready");
+  Walk trace;Hash target{};target.fill(255);(void)run_impl(pph,timestamp,daa,target,nonce,1,{},&trace);return trace;
+}
+ResidentSearchResult CudaResidentSearch::run(const Hash&pph,std::uint64_t timestamp,std::uint64_t daa,const Hash&target,
+    std::uint64_t start,std::uint64_t count,const std::function<void(bool)>&after_enqueue) {
+  return run_impl(pph,timestamp,daa,target,start,count,after_enqueue,nullptr);
+}
+ResidentSearchResult CudaResidentSearch::run_impl(const Hash &pph,std::uint64_t timestamp,std::uint64_t daa,const Hash &target,std::uint64_t start,std::uint64_t count,const std::function<void(bool)> &after_enqueue,Walk*trace){
   if(!count||count>18432||start==UINT64_MAX||count>UINT64_MAX-start)throw std::invalid_argument("resident nonce range outside bounded nonwrapping interval");
   auto &p=*impl_;check(cuCtxSetCurrent(p.ctx.value),"bind resident context on current thread");
+  if((daa>=pom_v5_activation_daa)!=bool(p.v5))throw std::logic_error("resident pad/PoM era mismatch; v5 must be prepared explicitly");
+  if(trace && (!p.v5||count!=1))throw std::invalid_argument("diagnostics require exactly one v5 walk");
+  Buffer trace_offsets,trace_states;
+  if(trace){trace_offsets.allocate(walk_steps*8);trace_states.allocate((walk_steps+1)*tile_bytes);}
+  auto bases=p.v5?p.v5->bases.ptr:p.bases.ptr;
+  auto prefix=p.v5?p.v5->prefix.ptr:p.prefix.ptr;
+  auto lut=p.v5?p.v5->lut.ptr:p.lut.ptr;
+  auto tensors=p.v5?p.v5->tensor_count:p.tensor_count;
   const auto state=seed_sponge_state(pph,timestamp,daa);check(cuMemcpyHtoD(p.sponge.ptr,state.data(),200),"copy seed sponge");
   const std::uint64_t none=UINT64_MAX;check(cuMemcpyHtoD(p.winner.ptr,&none,8),"reset winner");
   constexpr std::uint64_t salt[4]={0x7C99D381176D4EC4ULL,0xC2E28E3E28118C36ULL,0xD496CE1B129B76CAULL,0x47CF0979FA580BCEULL};
   std::uint64_t words[4],targets[4],unused[4]{};for(unsigned i=0;i<4;++i){words[i]=le64(pph.data()+8*i)^salt[i];targets[i]=le64(target.data()+8*i);}
   std::uint32_t k=256,seed_h10=1,precomputed=1;
-  void *params[]={&p.bases.ptr,&p.prefix.ptr,&p.tensor_count,&p.tiles,&k,&words[0],&words[1],&words[2],&words[3],&unused[0],&unused[1],&unused[2],&unused[3],&timestamp,&targets[0],&targets[1],&targets[2],&targets[3],&start,&count,&p.lut.ptr,&p.shift,&p.reciprocal,&p.winner.ptr,&p.sponge.ptr,&seed_h10,&p.h10_seeds.ptr,&precomputed,&p.tile_folds.ptr};
+  void *params[]={&bases,&prefix,&tensors,&p.tiles,&k,&words[0],&words[1],&words[2],&words[3],&unused[0],&unused[1],&unused[2],&unused[3],&timestamp,&targets[0],&targets[1],&targets[2],&targets[3],&start,&count,&lut,&p.shift,&p.reciprocal,&p.winner.ptr,&p.sponge.ptr,&seed_h10,&p.h10_seeds.ptr,&precomputed,&p.tile_folds.ptr};
   check(cuEventRecord(p.resources.begin,p.resources.stream),"record resident launch");
   // Include seed preparation in the measured batch time. Stream ordering
   // makes its output visible without a host or device-wide synchronization.
   void *seed_params[]={&p.sponge.ptr,&start,&count,&p.h10_seeds.ptr};
   check(cuLaunchKernel(p.seed_kernel,static_cast<unsigned>((count+127)/128),1,1,128,1,1,0,p.resources.stream,seed_params,nullptr),"prepare H10 seeds");
-  check(cuLaunchKernel(p.kernel,static_cast<unsigned>((count+3)/4),1,1,128,1,1,12416,p.resources.stream,params,nullptr),"launch resident PoM");
+  std::vector<void*> launch_params(std::begin(params),std::end(params));
+  if(p.v5) {
+    launch_params.insert(launch_params.end(),{&p.v5->spec.tiles,&p.v5->reciprocal,&p.v5->pad_steps,&trace_offsets.ptr,&trace_states.ptr});
+  }
+  check(cuLaunchKernel(p.v5?p.v5_kernel:p.kernel,static_cast<unsigned>((count+3)/4),1,1,128,1,1,12416,p.resources.stream,launch_params.data(),nullptr),"launch resident PoM");
   check(cuEventRecord(p.resources.end,p.resources.stream),"record resident completion");if(after_enqueue){const auto status=cuEventQuery(p.resources.end);if(status!=CUDA_SUCCESS&&status!=CUDA_ERROR_NOT_READY)check(status,"resident completion query");after_enqueue(status==CUDA_ERROR_NOT_READY);}
   check(cuEventSynchronize(p.resources.end),"complete resident PoM");
   float elapsed=0;check(cuEventElapsedTime(&elapsed,p.resources.begin,p.resources.end),"resident kernel elapsed");
   std::uint64_t found=none;check(cuMemcpyDtoH(&found,p.winner.ptr,8),"read winning nonce");
   if(found!=none&&(found<start||found-start>=count))throw std::runtime_error("resident GPU returned out-of-range nonce");
+  if(trace){trace->offsets.resize(walk_steps);trace->states.resize(walk_steps+1);
+    check(cuMemcpyDtoH(trace->offsets.data(),trace_offsets.ptr,walk_steps*8),"read v5 diagnostic offsets");
+    check(cuMemcpyDtoH(trace->states.data(),trace_states.ptr,(walk_steps+1)*tile_bytes),"read v5 diagnostic states");}
   return {found==none?std::nullopt:std::optional(found),count,elapsed};
 }
 }

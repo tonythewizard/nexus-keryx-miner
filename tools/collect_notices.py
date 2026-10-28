@@ -36,7 +36,7 @@ def main():
         if name and relative.parts[0] in ('vendor', 'consensus') and (
                 NOTICE.fullmatch(relative.name) or relative.name == 'RESIDENT_KERNEL_LICENSE-MIT'):
             copy_notice(ROOT / relative, ROOT, args.output / 'source' / relative)
-    upstream = ROOT / '_deps/keryx-node'
+    upstream = ROOT / '_deps/keryx-node-16d1864d835a'
     if not upstream.is_dir():
         raise ValueError('Pinned oracle source missing')
     for notice in upstream.iterdir():

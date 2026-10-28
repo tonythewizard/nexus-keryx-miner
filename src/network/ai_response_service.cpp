@@ -1,3 +1,4 @@
+#include "keryx/nexus/protocol_rules.hpp"
 #include "keryx/nexus/platform/io.hpp"
 #include "keryx/nexus/ai_response_service.hpp"
 #include <chrono>
@@ -28,15 +29,19 @@
 #include <zlib.h>
 
 extern "C" {
-int nexus_ai_open_request(const std::uint8_t *, std::size_t, const std::uint8_t *,
-                          std::uint8_t *, std::size_t *, std::uint8_t *, std::uint8_t *);
-int nexus_ai_seal_private_response(const std::uint8_t *, const std::uint8_t *, const std::uint8_t *,
+int nexus_ai_open_request_v2(const std::uint8_t *, std::size_t, const std::uint8_t *,
+                          std::uint8_t *, std::size_t *, std::uint8_t *);
+int nexus_ai_seal_private_response_v2(const std::uint8_t *, std::size_t, const std::uint8_t *, const std::uint8_t *,
                                   const std::uint8_t *, std::size_t, std::uint8_t *, std::size_t *);
 int nexus_ai_build_signed_response(const std::uint8_t *, const std::uint8_t *, const std::uint8_t *,
                                    std::uint64_t, const std::uint8_t *, std::size_t,
                                    const std::uint8_t *, std::size_t, std::uint8_t *, std::size_t *);
-int nexus_ai_verify_response(const std::uint8_t *, std::size_t, const std::uint8_t *,
-                             const std::uint8_t *, const std::uint8_t *, std::uint8_t *, std::size_t *);
+int nexus_ai_build_signed_native_response(const std::uint8_t*,const std::uint8_t*,const std::uint8_t*,std::uint64_t,
+ const std::uint8_t*,std::size_t,const std::uint8_t*,std::size_t,std::uint8_t*,std::size_t*,const std::uint8_t*,std::size_t,std::uint32_t);
+int nexus_ai_verify_response_v2(const std::uint8_t *, std::size_t, const std::uint8_t *,
+                             const std::uint8_t *, const std::uint8_t *, std::size_t, std::uint8_t *, std::size_t *);
+int nexus_ai_verify_built_response(const std::uint8_t *, std::size_t, const std::uint8_t *,
+                                    const std::uint8_t *, const std::uint8_t *, std::size_t);
 int nexus_ai_verify_escrow_delegation(const std::uint8_t *, std::size_t,
                                      const std::uint8_t *, const std::uint8_t *);
 std::uint64_t nexus_ai_max_answer_len(std::uint32_t);
@@ -233,9 +238,19 @@ ResponseJournal::ResponseJournal(std::filesystem::path path) : path_(std::filesy
 
 void ResponseJournal::recover() {
   std::lock_guard lock(mutex_);
-  records_.clear();
   std::ifstream in(path_);
-  if (!in) return;
+  if (!in) {
+    std::error_code error;
+    const auto status = std::filesystem::symlink_status(path_, error);
+    if ((error && error != std::errc::no_such_file_or_directory) ||
+        status.type() != std::filesystem::file_type::not_found)
+      throw std::runtime_error("cannot open existing AiResponse journal; recovery refused");
+    records_.clear(); // A genuinely absent journal retains the fresh-start behavior.
+    return;
+  }
+  // Publish only a completely validated reconstruction. A corrupt tail or read
+  // error must not replace an ambiguous receipt with an earlier prefix state.
+  decltype(records_) recovered;
   std::string line;
   while (std::getline(in, line)) {
     const auto last = line.rfind('|');
@@ -251,11 +266,16 @@ void ResponseJournal::recover() {
     if (record.request_id.find_first_not_of("0123456789abcdef") != std::string::npos ||
         (!record.transaction_id.empty() && record.transaction_id.find_first_not_of("0123456789abcdef") != std::string::npos))
       throw std::runtime_error("AiResponse journal identifiers malformed");
-    records_[record.request_id] = std::move(record);
+    recovered[record.request_id] = std::move(record);
   }
+  if (!in.eof() || in.bad())
+    throw std::runtime_error("AiResponse journal read failed; recovery refused");
+  records_.swap(recovered);
 }
 
 bool ResponseJournal::begin(std::string id) {
+  if (id.size() != 64 || id.find_first_not_of("0123456789abcdef") != std::string::npos)
+    throw std::invalid_argument("AiResponse journal request ID must be lowercase hex");
   std::lock_guard lock(mutex_);
   if (records_.contains(id)) return false;
   ResponseJournalRecord record{std::move(id), {}, ResponseState::Discovered};
@@ -265,7 +285,7 @@ bool ResponseJournal::begin(std::string id) {
 }
 
 bool ResponseJournal::reconsider_unsubmitted_not_assigned(std::string_view id) {
-  std::lock_guard lock(mutex_);auto it=records_.find(std::string(id));
+  std::lock_guard lock(mutex_);auto it=find_record(records_, id);
   if(it==records_.end()||it->second.state!=ResponseState::NotAssigned||!it->second.transaction_id.empty())return false;
   ResponseJournalRecord reset{std::string(id),{},ResponseState::Discovered};
   append_locked(reset);it->second=std::move(reset);return true;
@@ -273,7 +293,7 @@ bool ResponseJournal::reconsider_unsubmitted_not_assigned(std::string_view id) {
 
 bool ResponseJournal::reset_pre_submission(std::string_view id) {
   std::lock_guard lock(mutex_);
-  auto it = records_.find(std::string(id));
+  auto it = find_record(records_, id);
   if (it == records_.end() || terminal(it->second.state) ||
       it->second.state == ResponseState::Submitting ||
       it->second.state == ResponseState::UnknownAfterTimeout ||
@@ -287,12 +307,23 @@ bool ResponseJournal::reset_pre_submission(std::string_view id) {
   return true;
 }
 
+bool ResponseJournal::recover_persisted_response(std::string_view id,std::string_view txid) {
+ std::lock_guard lock(mutex_);auto it=find_record(records_, id);
+ if(it==records_.end()||terminal(it->second.state)||it->second.state==ResponseState::ChainObserved)return false;
+ if(txid.size()!=64||txid.find_first_not_of("0123456789abcdef")!=std::string_view::npos||(!it->second.transaction_id.empty()&&it->second.transaction_id!=txid))throw std::runtime_error("H15 persisted response/journal identity conflict");
+ if(it->second.state==ResponseState::UnknownAfterTimeout&&it->second.transaction_id==txid)return true;
+ auto recovered=it->second;recovered.transaction_id=txid;recovered.state=ResponseState::UnknownAfterTimeout;
+ append_locked(recovered);it->second=std::move(recovered);return true;
+}
+
 bool ResponseJournal::transition(std::string_view id, ResponseState next, std::string txid) {
   std::lock_guard lock(mutex_);
-  auto it = records_.find(std::string(id));
+  auto it = find_record(records_, id);
   if (it == records_.end() || !allowed_transition(it->second.state, next)) return false;
   if (!txid.empty() && (txid.size() != 64 || txid.find_first_not_of("0123456789abcdef") != std::string::npos))
     throw std::invalid_argument("AiResponse journal transaction ID must be lowercase hex");
+  if (!txid.empty() && !it->second.transaction_id.empty() && txid != it->second.transaction_id)
+    throw std::invalid_argument("AiResponse journal transaction identity conflict");
   auto updated = it->second;
   if (!txid.empty()) updated.transaction_id = std::move(txid);
   updated.state = next;
@@ -306,7 +337,7 @@ bool ResponseJournal::mark_response_reorged(std::string_view id) {
 }
 
 std::optional<ResponseJournalRecord> ResponseJournal::get(std::string_view id) const {
-  std::lock_guard lock(mutex_); const auto it = records_.find(std::string(id));
+  std::lock_guard lock(mutex_); const auto it = find_record(records_, id);
   if (it == records_.end()) return std::nullopt;
   return it->second;
 }
@@ -346,24 +377,31 @@ void ResponseJournal::append_locked(const ResponseJournalRecord &record) {
 }
 
 int stock_open_request(std::span<const std::uint8_t> payload, const std::array<std::uint8_t, 32> &secret,
-                       std::vector<std::uint8_t> &prompt, std::array<std::uint8_t, 32> &root, bool &is_private) {
+                       std::vector<std::uint8_t> &prompt, bool &is_private) {
   std::size_t length = 0; std::uint8_t private_flag = 0;
-  int rc = nexus_ai_open_request(payload.data(), payload.size(), secret.data(), nullptr, &length, root.data(), &private_flag);
+  int rc = nexus_ai_open_request_v2(payload.data(), payload.size(), secret.data(), nullptr, &length, &private_flag);
   if (rc != 2 && rc != 0) return rc;
   prompt.resize(length); is_private = private_flag != 0;
-  rc = nexus_ai_open_request(payload.data(), payload.size(), secret.data(), prompt.data(), &length, root.data(), &private_flag);
+  rc = nexus_ai_open_request_v2(payload.data(), payload.size(), secret.data(), prompt.data(), &length, &private_flag);
   if (rc == 0) prompt.resize(length); else prompt.clear();
   return rc;
 }
 
-std::vector<std::uint8_t> stock_seal_private_response(const std::array<std::uint8_t, 32> &root,
+std::optional<std::uint32_t> stock_request_prompt_size(const protowire::RpcTransaction &tx,const std::array<std::uint8_t,32> &secret) {
+ try {const auto payload=decode_hex(tx.payload());if(!payload||payload->size()>2U*1024*1024)return std::nullopt;
+  std::vector<std::uint8_t> bytes;bool priv=false;if(stock_open_request(*payload,secret,bytes,priv)!=0)return std::nullopt;
+  const auto length=priv?prompt_from_private(bytes).size():bytes.size();if(length>1U<<20)return std::nullopt;return static_cast<std::uint32_t>(length);
+ }catch(...){return std::nullopt;}
+}
+
+std::vector<std::uint8_t> stock_seal_private_response(std::span<const std::uint8_t> request_payload,
     const std::array<std::uint8_t, 32> &request, const std::array<std::uint8_t, 32> &secret,
     std::span<const std::uint8_t> answer) {
   std::size_t length = 0;
-  int rc = nexus_ai_seal_private_response(root.data(), request.data(), secret.data(), answer.data(), answer.size(), nullptr, &length);
+  int rc = nexus_ai_seal_private_response_v2(request_payload.data(), request_payload.size(), request.data(), secret.data(), answer.data(), answer.size(), nullptr, &length);
   if (rc != 2 && rc != 0) throw std::runtime_error("official private response sealing failed");
   std::vector<std::uint8_t> out(length);
-  rc = nexus_ai_seal_private_response(root.data(), request.data(), secret.data(), answer.data(), answer.size(), out.data(), &length);
+  rc = nexus_ai_seal_private_response_v2(request_payload.data(), request_payload.size(), request.data(), secret.data(), answer.data(), answer.size(), out.data(), &length);
   if (rc != 0) throw std::runtime_error("official private response sealing failed");
   out.resize(length); return out;
 }
@@ -383,31 +421,39 @@ std::vector<std::uint8_t> stock_build_signed_response(const std::array<std::uint
 }
 
 bool stock_verify_response(std::span<const std::uint8_t> payload, const std::array<std::uint8_t, 32> &request,
-    const std::array<std::uint8_t, 32> &pubkey, const std::optional<std::array<std::uint8_t, 32>> &root,
+    const std::array<std::uint8_t, 32> &pubkey, const std::optional<std::vector<std::uint8_t>> &requester_secret,
     std::vector<std::uint8_t> *answer) {
   std::size_t length = answer ? answer->size() : 0;
-  const int rc = nexus_ai_verify_response(payload.data(), payload.size(), request.data(), pubkey.data(),
-      root ? root->data() : nullptr, answer && !answer->empty() ? answer->data() : nullptr, &length);
+  const int rc = nexus_ai_verify_response_v2(payload.data(), payload.size(), request.data(), pubkey.data(),
+      requester_secret ? requester_secret->data() : nullptr, requester_secret ? requester_secret->size() : 0, answer && !answer->empty() ? answer->data() : nullptr, &length);
   if (rc == 2 && answer) {
     answer->resize(length);
-    const int retry = nexus_ai_verify_response(payload.data(), payload.size(), request.data(), pubkey.data(),
-        root ? root->data() : nullptr, answer->data(), &length);
+    const int retry = nexus_ai_verify_response_v2(payload.data(), payload.size(), request.data(), pubkey.data(),
+        requester_secret ? requester_secret->data() : nullptr, requester_secret ? requester_secret->size() : 0, answer->data(), &length);
     if (retry != 0) return false;
     answer->resize(length); return true;
   }
+  if (rc == 0 && answer) answer->resize(length);
   return rc == 0;
+}
+
+bool stock_verify_built_response(std::span<const std::uint8_t> payload,
+    const std::array<std::uint8_t, 32> &request, const std::array<std::uint8_t, 32> &pubkey,
+    std::span<const std::uint8_t> sealed_body) {
+  return nexus_ai_verify_built_response(payload.data(), payload.size(), request.data(),
+      pubkey.data(), sealed_body.data(), sealed_body.size()) == 0;
 }
 
 bool stock_verify_response_signature(std::span<const std::uint8_t> payload,
     const std::array<std::uint8_t, 32> &request, const std::array<std::uint8_t, 32> &pubkey) {
   std::size_t unused = 0;
-  const int rc = nexus_ai_verify_response(payload.data(), payload.size(), request.data(),
-      pubkey.data(), nullptr, nullptr, &unused);
+  const int rc = nexus_ai_verify_response_v2(payload.data(), payload.size(), request.data(),
+      pubkey.data(), nullptr, 0, nullptr, &unused);
   // The pinned Rust bridge returns -8 only AFTER request/responder binding and
-  // Schnorr authentication succeed, when a private answer has no requester root.
+  // Schnorr authentication succeed, when a private answer has no requester secret.
   // Full verification/decryption above retains its original stricter contract.
-  constexpr int authenticated_private_answer_without_root = -8;
-  return rc == 0 || rc == authenticated_private_answer_without_root;
+  constexpr int authenticated_private_answer_without_secret = -8;
+  return rc == 0 || rc == authenticated_private_answer_without_secret;
 }
 
 AiResponseService::AiResponseService(AiResponseConfig config)
@@ -524,6 +570,15 @@ ServeResult AiResponseService::serve(const protowire::RpcTransaction &tx, std::u
   const auto id = parsed->stable_id;
   const auto assignment = classify_assignment(*parsed, config_.service_identity,
       hex_encode(config_.escrow_pubkey.data(), config_.escrow_pubkey.size()), config_.tier, providers);
+  if(config_.native_h15&&parsed->is_private&&effects.recover_traced){
+    if(const auto saved=effects.recover_traced(parsed->request_hash)){
+      (void)journal_.begin(id);const auto old=journal_.get(id);
+      if(old&&(old->state==ResponseState::RpcAcknowledged||old->state==ResponseState::ChainObserved||old->state==ResponseState::Finalized))return ServeResult::Duplicate;
+      if(!journal_.recover_persisted_response(id,*saved))return ServeResult::Failed;
+      if(effects.reconcile(*saved)){(void)journal_.transition(id,ResponseState::RpcAcknowledged);return ServeResult::Duplicate;}
+      return ServeResult::WaitingReconciliation;
+    }
+  }
   if (!journal_.begin(id)) {
     const auto old = journal_.get(id);
     if (!old) return ServeResult::Failed;
@@ -573,9 +628,14 @@ ServeResult AiResponseService::serve(const protowire::RpcTransaction &tx, std::u
   if (!payload || !journal_.transition(id, ResponseState::RequestValidated)) {
     (void)journal_.transition(id, ResponseState::Failed); return ServeResult::Failed;
   }
-  std::vector<std::uint8_t> prompt_bytes; std::array<std::uint8_t, 32> root{}; bool is_private = false;
+  const auto h15_at=config_.network=="mainnet"?140'115'000ULL:3'500ULL;
+  const bool native_capable=config_.native_h15&&effects.infer_traced&&effects.persist_trace;
+  const auto require_era=[&](std::uint64_t at) {if(at>=h15_at&&!native_capable)throw std::runtime_error("H15 native audit runtime unavailable");};
+  try { require_era(now_daa()); }
+  catch (...) { (void)journal_.transition(id, ResponseState::Failed); return ServeResult::Failed; }
+  std::vector<std::uint8_t> prompt_bytes; bool is_private = false;
   const int open_rc = measured_phase(effects,"request_open",[&] {
-    return stock_open_request(*payload, config_.escrow_secret, prompt_bytes, root, is_private);
+    return stock_open_request(*payload, config_.escrow_secret, prompt_bytes, is_private);
   });
   if (open_rc == 1) { (void)journal_.transition(id, ResponseState::NotAssigned); return ServeResult::NotAssigned; }
   if (open_rc != 0 || is_private != parsed->is_private) { (void)journal_.transition(id, ResponseState::Failed); return ServeResult::Failed; }
@@ -583,12 +643,16 @@ ServeResult AiResponseService::serve(const protowire::RpcTransaction &tx, std::u
   try { prompt = is_private ? prompt_from_private(prompt_bytes) : std::string(prompt_bytes.begin(), prompt_bytes.end()); }
   catch (...) { (void)journal_.transition(id, ResponseState::Failed); return ServeResult::Failed; }
   (void)journal_.transition(id, ResponseState::Inferencing);
-  std::string answer;
-  try { answer = measured_phase(effects,"inference",[&] {return effects.infer(prompt, parsed->max_tokens);}); }
+  std::string answer;std::optional<AiTracedAnswer> traced;
+  try { answer = measured_phase(effects,"inference",[&] {
+    if(is_private&&now_daa()>=h15_at){traced=effects.infer_traced(prompt,parsed->max_tokens,parsed->request_hash);return traced->answer;}
+    return effects.infer(prompt, parsed->max_tokens);
+  }); }
   catch (...) { (void)journal_.transition(id, ResponseState::Failed); return ServeResult::Failed; }
   // Official miner 4ebf4bc: cap AiRequest answer bytes on a UTF-8 boundary.
   // Apply before publishing/signing so CID, word count and signed body remain consistent.
   const auto cap = nexus_ai_max_answer_len(parsed->max_tokens);
+  if(traced&&answer.size()>cap){(void)journal_.transition(id,ResponseState::Failed);return ServeResult::Failed;}
   if (answer.size() > cap) {
     auto end = static_cast<std::size_t>(cap);
     while (end > 0 && (static_cast<unsigned char>(answer[end]) & 0xc0U) == 0x80U) --end;
@@ -596,6 +660,8 @@ ServeResult AiResponseService::serve(const protowire::RpcTransaction &tx, std::u
   }
   if (answer.empty()) { (void)journal_.transition(id, ResponseState::Failed); return ServeResult::Failed; }
   const auto response_daa=now_daa();
+  try { require_era(response_daa);if(is_private&&response_daa>=h15_at&&!traced)throw std::runtime_error("H15 crossed during untraced generation"); }
+  catch (...) { (void)journal_.transition(id, ResponseState::Failed); return ServeResult::Failed; }
   if (response_daa > expiry) { (void)journal_.transition(id, ResponseState::Expired); return ServeResult::Expired; }
   (void)journal_.transition(id, ResponseState::ResponsePrepared);
   const std::span<const std::uint8_t> answer_bytes(reinterpret_cast<const std::uint8_t *>(answer.data()), answer.size());
@@ -605,7 +671,7 @@ ServeResult AiResponseService::serve(const protowire::RpcTransaction &tx, std::u
   try {
     if (is_private) {
       private_body = measured_phase(effects,"private_seal",[&] {
-        return stock_seal_private_response(root, parsed->request_hash, config_.escrow_secret, answer_bytes);
+        return stock_seal_private_response(*payload, parsed->request_hash, config_.escrow_secret, traced?std::span<const std::uint8_t>(traced->sealed_plaintext):answer_bytes);
       });
       if (inline_private) cid = sha256_multihash(private_body);
       else cid = measured_phase(effects,"ipfs_publish_readback",[&] {return effects.publish_and_readback(private_body);});
@@ -615,17 +681,22 @@ ServeResult AiResponseService::serve(const protowire::RpcTransaction &tx, std::u
   } catch (...) { (void)journal_.transition(id, ResponseState::Failed); return ServeResult::Failed; }
   if (response_daa >= config_.signed_response_activation_daa) {
     auto signed_payload = measured_phase(effects,"response_sign",[&] {
+      if(traced){
+        std::vector<std::uint8_t> result(1U<<20);std::size_t n=result.size();
+        const auto rc=nexus_ai_build_signed_native_response(parsed->request_hash.data(),config_.escrow_secret.data(),cid.data(),response_daa,
+          answer_bytes.data(),answer_bytes.size(),inline_private?private_body.data():nullptr,inline_private?private_body.size():0,result.data(),&n,
+          traced->commitment.data(),traced->commitment.size(),config_.network=="mainnet"?0:1);
+        if(rc!=0||n>result.size())throw std::runtime_error("native traced response construction failed");
+        result.resize(n);return result;
+      }
       return stock_build_signed_response(parsed->request_hash, config_.escrow_secret, cid, response_daa,
           answer_bytes, inline_private ? std::span<const std::uint8_t>(private_body) : std::span<const std::uint8_t>{});
     });
-    std::vector<std::uint8_t> independently_opened;
     const bool response_valid = measured_phase(effects,"response_verify",[&] {
-      return stock_verify_response(signed_payload, parsed->request_hash,
-          config_.escrow_pubkey, inline_private ? std::optional(root) : std::nullopt,
-          inline_private ? &independently_opened : nullptr);
+      return stock_verify_built_response(signed_payload, parsed->request_hash,
+          config_.escrow_pubkey, inline_private ? std::span<const std::uint8_t>(private_body) : std::span<const std::uint8_t>{});
     });
-    if (!response_valid || (inline_private && !std::equal(answer_bytes.begin(), answer_bytes.end(),
-                                                           independently_opened.begin(), independently_opened.end()))) {
+    if (!response_valid) {
       (void)journal_.transition(id, ResponseState::Failed); return ServeResult::Failed;
     }
     (void)journal_.transition(id, ResponseState::ResponseSigned);
@@ -636,6 +707,9 @@ ServeResult AiResponseService::serve(const protowire::RpcTransaction &tx, std::u
     if (!journal_.transition(id, ResponseState::TransactionPrepared)) { (void)journal_.transition(id, ResponseState::Failed); return ServeResult::Failed; }
     const auto txid = measured_phase(effects,"transaction_build",[&] {return official_txid(response);});
     if(now_daa()>expiry){(void)journal_.transition(id,ResponseState::Expired);return ServeResult::Expired;}
+    try { require_era(now_daa()); }
+    catch (...) { (void)journal_.transition(id, ResponseState::Failed); return ServeResult::Failed; }
+    if(traced){try{effects.persist_trace(txid,signed_payload,response_daa,expiry);}catch(...){(void)journal_.transition(id,ResponseState::Failed);return ServeResult::Failed;}}
     (void)journal_.transition(id, ResponseState::Submitting, txid);
     // The node may see a DAG request before its private-request admission index is
     // populated. Stock retains the signed transaction and retries at 3 s, at most
@@ -650,6 +724,8 @@ ServeResult AiResponseService::serve(const protowire::RpcTransaction &tx, std::u
       if (now_daa() > expiry) {
         (void)journal_.transition(id, ResponseState::Expired); return ServeResult::Expired;
       }
+      try { require_era(now_daa()); }
+      catch (...) { (void)journal_.transition(id, ResponseState::Failed); return ServeResult::Failed; }
       const auto result = measured_phase(effects,"submit_rpc",[&] {return effects.submit(response, txid);});
       const bool retryable = inline_private &&
           result.state == AiResponseEffects::SubmitResult::State::Rejected &&

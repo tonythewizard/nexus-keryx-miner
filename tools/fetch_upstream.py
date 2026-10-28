@@ -5,11 +5,11 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 URL = "https://github.com/Keryx-Labs/keryx-node.git"
-COMMIT = "70ed12af172ac8dab9004b6ef11848f581b2a060"
+COMMIT = "16d1864d835ab4c8359bb23a354351c12088b478"
 
 
 def main():
-    destination = ROOT / "_deps/keryx-node"
+    destination = ROOT / "_deps/keryx-node-16d1864d835a"
     if destination.exists():
         head = subprocess.check_output(["git", "-C", str(destination), "rev-parse", "HEAD"], text=True).strip()
         dirty = subprocess.check_output(["git", "-C", str(destination), "status", "--porcelain"], text=True)

@@ -20,7 +20,19 @@ int main(){try{
  for(const auto gate:{WorkGate::AiPaused,WorkGate::Stopped,WorkGate::Unknown})
   expect(!startup_attestation_gate(gate),"Attestation ignored AI/stop/ownership gate");
  unsigned polls=0;
- expect(bounded_work_ready([&]{return ++polls<3?WorkGate::RefreshPending:WorkGate::Ready;},[]{return false;}),"Resolved refresh discarded valid work");
+ // Windows may round a 100us sleep past the entire 5ms budget. Exercise
+ // refresh transitions with a virtual clock, independent of host scheduling.
+ auto tick=std::chrono::steady_clock::time_point{};
+ const auto now=[&]{return tick;};
+ const auto wait=[&]{tick+=std::chrono::microseconds(100);};
+ expect(bounded_work_ready([&]{return ++polls<3?WorkGate::RefreshPending:WorkGate::Ready;},[]{return false;},now,wait),"Resolved refresh discarded valid work");
+ expect(polls==3,"Resolved refresh was not rechecked");
+ const auto start=tick;
+ expect(!bounded_work_ready([]{return WorkGate::RefreshPending;},[]{return false;},now,wait),"Unresolved virtual refresh admitted");
+ expect(tick-start==std::chrono::milliseconds(5),"Refresh exceeded its wait budget");
+ unsigned waits=0;
+ expect(!bounded_work_ready([]{return WorkGate::RefreshPending;},[&]{return waits==1;},now,[&]{++waits;wait();}),"AI cancellation during refresh ignored");
+ expect(waits==1,"AI cancellation waited for the full budget");
  expect(!bounded_work_ready([]{return WorkGate::Stale;},[]{return false;}),"Stale work admitted");
  expect(!bounded_work_ready([]{return WorkGate::Ready;},[]{return true;}),"AI/stop cancellation ignored");
  expect(!bounded_work_ready([]{return WorkGate::RefreshPending;},[]{return false;}),"Unresolved refresh admitted");
