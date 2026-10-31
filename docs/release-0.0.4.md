@@ -6,6 +6,17 @@ baseline. The Windows x64 and Linux x86-64 downloads remain unsigned experimenta
 CLI packages for NVIDIA RTX 30/40/50 (SM 8.6, 8.9 and 12.0), with external
 models, trees, node/IPFS and keys.
 
+## Refreshed packages
+
+The refreshed v0.0.4 adds the H15 parallel proof builder (1–8 workers), one
+asynchronous H15 submission, persistent RPC stream reuse and bounded Rust
+audits after the submission attempt. Audit failure blocks further submissions;
+already sent candidates cannot be recalled. See [H15 ordering and validation](h15-post-submit.md).
+The release owner explicitly authorized updating the published v0.0.4 tag and
+replacing the archives after successful Windows/Linux CI. The previous tag and
+archives were backed up outside the source repository. BUILD.json and the
+bundled source identify the new exact source commit.
+
 ## Changes
 
 - Native PoM and resident-solver device images cover SM 8.6, 8.9 and 12.0.

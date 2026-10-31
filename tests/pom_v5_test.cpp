@@ -70,6 +70,13 @@ void cpu(const fs::path&dir) {
   for(auto count:{1ULL,61ULL,10000ULL}) {
     pad=official_v5_pad(0,m,r);pad.tiles=count;const auto nonce=123+count;
     const auto built=prove_v5_from_model(block_seed(pph,timestamp,nonce,pom_v5_activation_daa),0,64,pad,read,[&](auto t){return path(all,t);});
+    for(unsigned threads:{1U,2U,4U,8U}) {
+      const auto par_proof=prove_v5_from_walk_parallel(built.walk,0,64,read,[&](auto t){return path(all,t);},threads);
+      require(borsh_v5_container(par_proof,final_state(built.walk),pph)==borsh_v5_container(built.proof,final_state(built.walk),pph),"parallel proof wire mismatch");
+    }
+    rejected([&]{prove_v5_from_walk_parallel(built.walk,0,64,[](auto)->std::array<std::uint8_t,tile_bytes>{throw std::runtime_error("injected read error");},[&](auto t){return path(all,t);},8);},"parallel reader failure ignored");
+    for(unsigned bad_threads:{0U,9U})
+      rejected([&]{prove_v5_from_walk_parallel(built.walk,0,64,read,[&](auto t){return path(all,t);},bad_threads);},"invalid proof concurrency accepted");
     artifact(dir/("cpu-"+std::to_string(count)+".bin"),0,m,r,data.size()/32,pad,pph,timestamp,nonce,built.walk,built.proof);
     require(std::count_if(built.walk.offsets.begin(),built.walk.offsets.end(),[](auto off){return off>=64;})==v5_pad_steps(64,count),"v5 pad distribution");
     auto bad=built.proof;const auto it=std::find_if(bad.tiles.begin(),bad.tiles.end(),[](const auto&t){return t.empty();});
@@ -89,6 +96,10 @@ void cpu_real(const fs::path&dir,const fs::path&model_path,const fs::path&tree,c
   for(unsigned i=0;i<3;++i){const auto nonce=1234+i;
     const auto built=prove_v5_from_model(block_seed(pph,timestamp,nonce,pom_v5_activation_daa),0,model.chunk_count()/32,pad,
       [&](auto off){std::array<std::uint8_t,tile_bytes>b{};model.read_tile_into(off,b);return b;},[&](auto off){return merkle.tile_path(off);});
+    const auto par_proof=prove_v5_from_walk_parallel(built.walk,0,model.chunk_count()/32,
+      [&](auto off){std::array<std::uint8_t,tile_bytes>b{};model.read_tile_into(off,b);return b;},[&](auto off){return merkle.tile_path(off);},8);
+    require(par_proof.tiles==built.proof.tiles,"real parallel proof tiles mismatch");
+    require(par_proof.paths==built.proof.paths,"real parallel proof paths mismatch");
     artifact(dir/("real-cpu-"+std::to_string(i)+".bin"),0,id,root,model.chunk_count(),pad,pph,timestamp,nonce,built.walk,built.proof);
   }
   std::cout<<"V5_REAL_CPU=PASS complete_walks=3 official_pad_tiles="<<pad.tiles<<" submission=DISABLED\n";

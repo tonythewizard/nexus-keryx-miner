@@ -37,7 +37,7 @@ jobs:
         run: |
           set -euo pipefail
           export TMPDIR="$PWD/.local/tmp"
-          for case in live_worker_config primary_vulkan_policy startup_readiness; do
+          for case in live_worker_config primary_vulkan_policy startup_readiness post_submit_audits; do
             c++ -std=c++20 -pthread -Iinclude "tests/${case}_test.cpp" -o ".local/${case}"
             ".local/${case}"
           done

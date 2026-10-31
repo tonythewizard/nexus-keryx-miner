@@ -11,6 +11,7 @@
 #include <grpcpp/grpcpp.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <memory>
 #include <stdexcept>
@@ -181,6 +182,16 @@ const char *submission_state_name(SubmissionState state) noexcept {
   return "UNKNOWN_OUTCOME";
 }
 
+struct SubmitBlockClient::PersistentStream {
+  grpc::ClientContext context;
+  std::unique_ptr<grpc::ClientReaderWriter<protowire::KaspadRequest,protowire::KaspadResponse>> wire;
+  ~PersistentStream() {
+    context.TryCancel();
+    if(wire)(void)wire->Finish();
+  }
+};
+SubmitBlockClient::~SubmitBlockClient() = default;
+
 SubmitBlockClient::SubmitBlockClient(std::string endpoint) : endpoint_(std::move(endpoint)) {
   (void)endpoint_target(endpoint_); // validate transport policy before any request can be made
 }
@@ -190,6 +201,7 @@ SubmitBlockResult SubmitBlockClient::submit(const protowire::RpcBlock &block,
                                              bool enable_live_submit,
                                              std::chrono::seconds timeout,
                                              const std::function<bool()> &cancelled) {
+  std::unique_lock stream_lock(stream_mutex_); // one correlated request in flight
   const auto begin=std::chrono::steady_clock::now();
   auto phase=begin;
   const auto elapsed=[](auto since){return std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-since).count();};
@@ -203,7 +215,7 @@ SubmitBlockResult SubmitBlockClient::submit(const protowire::RpcBlock &block,
     throw std::invalid_argument("SubmitBlock nonce does not match verified candidate");
 
   SubmitBlockResult output;
-  if(cancelled && cancelled())return output;
+  if(blocked_.load(std::memory_order_acquire)||(cancelled && cancelled()))return output;
   transition(output, SubmissionState::CandidateValid);
   output.reservation = gate_.reserve(verified);
   const auto candidate_header = consensus::header_from_rpc(block.header());
@@ -225,7 +237,7 @@ SubmitBlockResult SubmitBlockClient::submit(const protowire::RpcBlock &block,
     channel=submit_channel_;
     }
     while(channel->GetState(true)!=GRPC_CHANNEL_READY) {
-      if(cancelled && cancelled())return done();
+      if(blocked_.load(std::memory_order_acquire)||(cancelled && cancelled()))return done();
       if(std::chrono::system_clock::now()>=deadline)throw std::runtime_error("node RPC channel connection timed out before request was sent");
       channel->WaitForStateChange(channel->GetState(false),
           std::min(deadline,std::chrono::system_clock::now()+std::chrono::milliseconds(10)));
@@ -236,62 +248,61 @@ SubmitBlockResult SubmitBlockClient::submit(const protowire::RpcBlock &block,
     throw;
   }
   output.timing.connect_ms=elapsed(phase);phase=std::chrono::steady_clock::now();
-  auto stub = protowire::RPC::NewStub(channel);
-  grpc::ClientContext context;
-  context.set_deadline(deadline);
-  std::jthread cancellation;
-  if(cancelled)cancellation=std::jthread([&](std::stop_token stop){
+  output.timing.stream_reused=static_cast<bool>(stream_);
+  if(!stream_) {
+    stream_=std::make_unique<PersistentStream>();
+    auto stub=protowire::RPC::NewStub(channel);
+    stream_->wire=stub->MessageStream(&stream_->context);
+    if(!stream_->wire) {stream_.reset();throw std::runtime_error("could not create persistent SubmitBlock stream");}
+  }
+  auto *active=stream_.get();
+  std::atomic_bool timed_out{false};
+  // A persistent context cannot carry a per-request gRPC deadline. Cancel the
+  // whole stream on timeout/preemption; reconnect only for a NEW candidate.
+  std::jthread cancellation([&](std::stop_token stop){
     while(!stop.stop_requested()) {
-      try {if(cancelled()){context.TryCancel();return;}}
-      catch(...){context.TryCancel();return;}
-      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+      if(std::chrono::system_clock::now()>=deadline) {
+        timed_out.store(true);active->context.TryCancel();return;
+      }
+      try {if(cancelled && cancelled()){active->context.TryCancel();return;}}
+      catch(...){active->context.TryCancel();return;}
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
   });
-  auto stream = stub->MessageStream(&context);
-  if (!stream) throw std::runtime_error("could not create SubmitBlock RPC.MessageStream");
+  const auto discard_stream=[&]{
+    cancellation.request_stop();cancellation.join();
+    stream_.reset();
+  };
   output.timing.stream_ms=elapsed(phase);phase=std::chrono::steady_clock::now();
-
   protowire::KaspadRequest request;
-  request.set_id(1);
-  auto *payload = request.mutable_submitblockrequest();
+  if(next_request_id_==0) {discard_stream();throw std::overflow_error("SubmitBlock request ID exhausted");}
+  request.set_id(next_request_id_++);
+  auto *payload=request.mutable_submitblockrequest();
   payload->mutable_block()->CopyFrom(block);
   payload->set_allownondaablocks(false);
   output.timing.prepare_ms=elapsed(phase);phase=std::chrono::steady_clock::now();
-  if(cancelled && cancelled()) {
-    context.TryCancel(); // No write attempted; retain the dedupe reservation.
-    return done();
-  }
-  if (!stream->Write(request)) {
+  if(blocked_.load(std::memory_order_acquire)||(cancelled && cancelled())||
+     (verified.still_current && !verified.still_current())) {discard_stream();return done();}
+  if(!active->wire->Write(request)) {
     output.timing.write_ms=elapsed(phase);
-    transition(output, SubmissionState::UnknownOutcome);
+    discard_stream();
+    transition(output,timed_out.load()?SubmissionState::UnknownAfterTimeout:SubmissionState::UnknownOutcome);
     return done();
   }
   output.timing.write_ms=elapsed(phase);phase=std::chrono::steady_clock::now();
-  transition(output, SubmissionState::SubmitSent);
-  if (!stream->WritesDone()) {
-    context.TryCancel();
-    transition(output, SubmissionState::UnknownOutcome);
-    return done();
-  }
+  transition(output,SubmissionState::SubmitSent);
   protowire::KaspadResponse response;
-  if (!stream->Read(&response) || response.id() != request.id() || !response.has_submitblockresponse()) {
+  if(!active->wire->Read(&response)||response.id()!=request.id()||!response.has_submitblockresponse()) {
     output.timing.response_ms=elapsed(phase);phase=std::chrono::steady_clock::now();
-    const auto status = stream->Finish();
-    output.timing.finish_ms=elapsed(phase);
-    transition(output, status.error_code() == grpc::StatusCode::DEADLINE_EXCEEDED
-                           ? SubmissionState::UnknownAfterTimeout
-                           : SubmissionState::UnknownOutcome);
+    discard_stream();output.timing.finish_ms=elapsed(phase);
+    transition(output,timed_out.load()?SubmissionState::UnknownAfterTimeout:SubmissionState::UnknownOutcome);
     return done();
   }
-  output.timing.response_ms=elapsed(phase);phase=std::chrono::steady_clock::now();
-  const auto status = stream->Finish();
-  output.timing.finish_ms=elapsed(phase);
-  if (!status.ok()) {
-    transition(output, status.error_code() == grpc::StatusCode::DEADLINE_EXCEEDED
-                           ? SubmissionState::UnknownAfterTimeout
-                           : SubmissionState::UnknownOutcome);
-    return done();
-  }
+  output.timing.response_ms=elapsed(phase);
+  cancellation.request_stop();cancellation.join();
+  // Receipt of the correlated protocol response is the acknowledgement.
+  // Keep the bidirectional stream open; do not half-close or Finish here.
+  output.timing.finish_ms=0;
   const auto &result = response.submitblockresponse();
   output.reason = result.rejectreason();
   if (result.has_error()) output.node_error = result.error().message();

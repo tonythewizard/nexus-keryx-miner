@@ -43,9 +43,11 @@ is kept in `AGENTS.md`.
 | Publication | `tools/security_gate.py`, `.githooks/`, `.github/workflows/`: privacy, secret and history gates |
 
 The productive path is: current template → leased canonical job → unique nonce
-→ full PoM walk → witness → independent Rust verification → real target check
+→ full PoM walk → witness → proof/target verification
 → current payout/delegation binding → block assembly → RPC submission → chain
 reconciliation. A stale job is discarded; an inconsistent binding is an error.
+The H15 CUDA fast path now uses bounded asynchronous submission and post-submit
+Rust auditing; see `docs/h15-post-submit.md` for ordering and failure semantics.
 `TARGET_FOUND`, `SUBMIT_SENT`, `RPC_ACKNOWLEDGED`, chain observation and selected
 chain confirmation are distinct states.
 

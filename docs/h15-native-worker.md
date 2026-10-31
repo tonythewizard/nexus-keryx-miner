@@ -29,8 +29,10 @@ A model-only pad fill tolerates template replacement; shutdown, AI work and
 device deselection still cancel it between bounded fill slices.
 
 The productive v5 path compares the GPU's 257 states and 256 offsets with an
-independent CPU walk, builds canonical empty pad witnesses and verifies them
-through the independent Rust stream before a candidate can be submitted. That
+independent CPU walk and builds canonical empty pad witnesses with 1–8 proof
+workers. The refreshed H15 fast path submits after CPU/GPU, model, Merkle,
+header and target checks, then audits through the independent Rust stream;
+see [post-submit ordering and failure semantics](h15-post-submit.md). The Rust
 stream selects v4/v5 by the header DAA and enforces official v5 geometry using
 the unmodified node core pinned at `16d1864`. Target failure remains a valid
 nonwinner outcome, separate from successful proof verification.

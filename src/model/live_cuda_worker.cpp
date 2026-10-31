@@ -63,6 +63,7 @@
 #include <fstream>
 #include <iostream>
 #include <syncstream>
+#include "keryx/nexus/post_submit_audits.hpp"
 #include <limits>
 #include <mutex>
 #include <stdexcept>
@@ -963,6 +964,23 @@ int main(int argc,char **argv) {
     if(submit_enabled) submit_client=std::make_unique<network::SubmitBlockClient>(endpoint);
     std::vector<std::future<void>> chain_observers; // bounded read-only RPC observers; never own CUDA
     std::mutex chain_observers_mutex;
+    std::uint64_t resident_batch_size=live_resident_batch_size;
+    if(const char *value=std::getenv("NEXUS_POM_BATCH_SIZE")) {
+      const std::string input(value);std::size_t used=0;const auto parsed=std::stoull(input,&used);
+      if(used!=input.size()||parsed<256||parsed>18432||parsed%256)throw std::invalid_argument("NEXUS_POM_BATCH_SIZE must be 256..18432 in steps of 256");
+      resident_batch_size=parsed;
+    }
+    unsigned proof_threads=8;
+    if(const char *value=std::getenv("NEXUS_POM_PROOF_THREADS")) {
+      const std::string input(value);std::size_t used=0;
+      const auto parsed=std::stoul(input,&used);
+      if(used!=input.size()||parsed<1||parsed>8)throw std::invalid_argument("NEXUS_POM_PROOF_THREADS must be 1..8");
+      proof_threads=static_cast<unsigned>(parsed);
+    }
+    std::shared_future<void> pending_h15_submit; // one immutable candidate in flight
+    std::atomic_bool proof_audit_failed{false}; // sticky: never re-arm in this process
+    PostSubmitAudits proof_auditors;
+    std::mutex rust_verifier_mutex;
     const auto observe_submission=[&](const network::SubmitBlockResult &result){
       if(result.block_hash.empty() || (result.state!=network::SubmissionState::RpcAcknowledged &&
          result.state!=network::SubmissionState::UnknownOutcome && result.state!=network::SubmissionState::UnknownAfterTimeout))return;
@@ -1230,6 +1248,8 @@ int main(int argc,char **argv) {
     // Join callback threads BEFORE destroying the shared model/engines on any exception.
     auto callback_cleanup=std::unique_ptr<int,std::function<void(int*)>>(new int(0),[&](int *p){
       request_worker_stop(stop,gpu_ownership,queue);
+      if(pending_h15_submit.valid())pending_h15_submit.wait();
+      proof_auditors.drain();
 #ifdef NEXUS_ENABLE_SECONDARY_VULKAN
       if(secondary_lane)secondary_lane->request_stop();
 #endif
@@ -1538,6 +1558,7 @@ int main(int argc,char **argv) {
       }
       {std::lock_guard lock(chain_observers_mutex);
         std::erase_if(chain_observers,[](auto &f){if(f.wait_for(std::chrono::seconds(0))==std::future_status::ready){f.get();return true;}return false;});}
+      proof_auditors.reap();
       const auto wait_start_ns=monotonic_ns();
       auto maybe_job=queue.wait_pop_for(std::chrono::milliseconds(reusable_job&&reusable_job->lease.valid()?0:100));
       const bool adopted_new_job=maybe_job.has_value();
@@ -1679,7 +1700,7 @@ int main(int argc,char **argv) {
           continue;
         }
 #endif
-        const std::uint64_t batch_count=nonce_limit==0?live_resident_batch_size:std::min<std::uint64_t>(256,nonce_limit-completed);
+        const std::uint64_t batch_count=nonce_limit==0?resident_batch_size:std::min<std::uint64_t>(256,nonce_limit-completed);
         ResidentSearchResult search;
 #ifdef NEXUS_ENABLE_SECONDARY_VULKAN
         auto ticket=gpu_work.reserve(MiningLane::Nvidia,job,pph,static_cast<std::uint32_t>(batch_count));
@@ -1752,47 +1773,152 @@ int main(int argc,char **argv) {
                  <<" completed="<<search.completed<<" kernel_ms="<<search.kernel_ms<<" rust_verification=PENDING\n"<<std::flush;
         if(v5) {
           const auto pad=official_v5_pad(header.pom_tier,official_model,official_root);
+          try {
           const auto seed=block_seed(pph,header.timestamp,winning_nonce,header.daa_score);
           const auto binding=bind_candidate(job,winning_nonce,header.timestamp,pph);
-          const auto built=prove_v5_from_model(seed,header.pom_tier,tile_count,pad,[&](std::uint64_t tile){
-            if(stop.load()||gpu_ownership.opoi_pending())throw PrefetchCancelled("H15 witness preempted");
-            std::array<std::uint8_t,tile_bytes> bytes;gguf.read_tile_into(tile,bytes);return bytes;
-          },[&](std::uint64_t tile){return merkle.tile_path(tile);});
-          Walk diagnostic;const bool diagnosed=gpu_ownership.run_pom([&]{
+          const auto proof_begin_ns=monotonic_ns();
+          // 1. Run GPU diagnostic FIRST (< 0.2 ms on CUDA resident engine)
+          Walk diagnostic;
+          const bool diagnosed=gpu_ownership.run_pom([&]{
             if(!resident||!resident->v5_ready_for(pad))throw std::runtime_error("H15 pad was released during witness");
             diagnostic=resident->diagnose_v5(pph,header.timestamp,header.daa_score,winning_nonce);
           });
           if(!diagnosed)continue;
-          if(diagnostic.states!=built.walk.states||diagnostic.offsets!=built.walk.offsets)
-            throw std::runtime_error("H15 CUDA/independent CPU parity mismatch");
-          const auto final=final_state(built.walk);const auto pow=pom_pow_value_h3(final,pph);
+
+          const auto final=final_state(diagnostic);
+          const auto pow=pom_pow_value_h3(final,pph);
           const bool target_met=little_endian_leq(pow,target.little_endian);
           if(target_met!=expected_winner)throw std::runtime_error("H15 GPU/CPU target decision mismatch");
-          const auto wire=borsh_v5_container(built.proof,final,pow);
-          const ProofArtifactContext context{seed,gguf.chunk_count(),header.timestamp,winning_nonce,header.daa_score,job.generation,final,header.pom_tier,official_root,target.little_endian,pph,response_digest,pow};
-          const auto artifacts=encode_proof_artifacts(context,built.walk,wire.size());
-          const auto name=safe_name(job.generation,winning_nonce);
-          const std::array<fs::path,3> paths{outdir/(name+".proof"),outdir/(name+".context"),outdir/(name+".trace")};
-          for(const auto &path:paths)if(fs::exists(path))throw std::runtime_error("H15 proof artifact already exists");
-          {std::ofstream f(paths[0],std::ios::binary);put(f,wire.data(),wire.size());}
-          {std::ofstream f(paths[1],std::ios::binary);put(f,artifacts.context_prefix.data(),artifacts.context_prefix.size());}
-          {std::ofstream f(paths[2],std::ios::binary);put(f,artifacts.trace.data(),artifacts.trace.size());}
-          const auto rust=rust_verifier.verify(artifacts.context_prefix,artifacts.trace,wire);
-          (void)rust; // Throws on rejection; failed artifacts remain available.
-          release_verified_nonwinner_artifacts(paths,true,target_met);
-          startup_parity_verified=true;telemetry.proof_completed();telemetry.proof_rust_verified();
-          std::cout<<"LIVE_H15_CUDA_NONCE=PASS nonce="<<winning_nonce<<" states=257 offsets=256 rust=PASS target_satisfied="<<(target_met?"true":"false")<<"\n"<<std::flush;
+          if(!target_met&&startup_parity_verified)continue;
+
+          const auto diagnostic_end_ns=monotonic_ns();
+          // 2. Prefetch OS page cache for Merkle tree slabs immediately
+          for(const auto off:diagnostic.offsets){
+            if(off<tile_count)merkle.prefetch_tile_path(off);
+          }
+
+          const auto prefetch_end_ns=monotonic_ns();
+          // 3. Launch independent CPU walk verification in background thread concurrently
+          auto cpu_walk_future=std::async(std::launch::async,[&]{
+            return walk_v5_from_model(seed,tile_count,pad,[&](std::uint64_t tile){
+              if(stop.load()||gpu_ownership.opoi_pending())throw PrefetchCancelled("H15 witness preempted");
+              std::array<std::uint8_t,tile_bytes> bytes;gguf.read_tile_into(tile,bytes);return bytes;
+            });
+          });
+
+          // 4. Concurrently build proof tiles & Merkle paths across 8 CPU worker threads
+          const auto proof=prove_v5_from_walk_parallel(diagnostic,header.pom_tier,tile_count,[&](std::uint64_t tile){
+            if(stop.load()||gpu_ownership.opoi_pending())throw PrefetchCancelled("H15 witness preempted");
+            std::array<std::uint8_t,tile_bytes> bytes;gguf.read_tile_into(tile,bytes);return bytes;
+          },[&](std::uint64_t tile){return merkle.tile_path(tile);},proof_threads);
+          const auto gather_end_ns=monotonic_ns();
+
+          // 5. Parity check with CPU consensus
+          const auto cpu_walk=cpu_walk_future.get();
+          if(diagnostic.states!=cpu_walk.states||diagnostic.offsets!=cpu_walk.offsets)
+            throw std::runtime_error("H15 CUDA/independent CPU parity mismatch");
+
+          const auto parity_end_ns=monotonic_ns();
+          const auto wire=borsh_v5_container(proof,final,pow);
+          const auto pack_end_ns=monotonic_ns();
+
+          // === BOUNDED ASYNCHRONOUS SUBMISSION AFTER CPU/GPU PARITY ===
           if(target_met){
             telemetry.target_satisfied();
-            if(submit_enabled&&candidate_matches_job(binding,job)&&job.lease.valid()&&!stop.load()&&ai_requests.size()==0&&!gpu_ownership.opoi_pending()&&live_selection->allows(LiveGpuSelection::Nvidia,primary_selection_token)&&queue.submission_allowed(job.generation)){
+            // Bounded backpressure: never create an unbounded submit queue.
+            if(pending_h15_submit.valid())pending_h15_submit.get();
+            if(submit_enabled&&!proof_audit_failed.load(std::memory_order_acquire)&&candidate_matches_job(binding,job)&&job.lease.valid()&&queue.submission_allowed(job.generation)&&!stop.load()&&ai_requests.size()==0&&!gpu_ownership.opoi_pending()&&live_selection->allows(LiveGpuSelection::Nvidia,primary_selection_token)){
               network::VerifiedSubmission verified;
               verified.job_id=hex(response_digest.data(),response_digest.size());verified.generation=job.generation;verified.nonce=winning_nonce;
               verified.pom_verified=verified.model_verified=verified.merkle_verified=verified.header_seed_verified=verified.target_satisfied=verified.job_fresh=verified.generation_matches=verified.miner_configured=true;
+              verified.still_current=[lease=job.lease,generation=job.generation,&queue]{
+                return lease.valid()&&queue.submission_allowed(generation);
+              };
               const std::string bytes(reinterpret_cast<const char*>(wire.data()),wire.size());
               network::PomWinner winner{std::move(verified),header.daa_score,final,header.pom_tier,bytes};
-              const auto result=network::submit_pom_winner(*submit_client,block,winner,job.fields.pay_address,job.fields.extra_data,true);
-              std::cout<<"LIVE_H15_SUBMIT_RESULT state="<<network::submission_state_name(result.state)<<" hash="<<result.block_hash<<"\n"<<std::flush;observe_submission(result);
+              pending_h15_submit=std::async(std::launch::async,
+                [&,block_copy=block,winner=std::move(winner),pay_copy=job.fields.pay_address,
+                   extra_copy=job.fields.extra_data,lease=job.lease,winning_nonce] {
+              try {
+                if(!lease.valid()||stop.load()||proof_audit_failed.load(std::memory_order_acquire)||gpu_ownership.opoi_pending())return;
+                const auto result=network::submit_pom_winner(*submit_client,block_copy,winner,pay_copy,extra_copy,true,std::chrono::seconds(5),[&]{return stop.load()||proof_audit_failed.load(std::memory_order_acquire)||gpu_ownership.opoi_pending();});
+                std::osyncstream(std::cout)<<"LIVE_H15_SUBMIT_RESULT state="<<network::submission_state_name(result.state)<<" hash="<<result.block_hash<<"\n"<<std::flush;
+                const auto timing_value=[](const std::optional<double> &v){return v?std::to_string(*v):std::string("null");};
+                std::osyncstream(std::cout)<<"{\"event\":\"POM_SUBMISSION_TIMING\",\"clock\":\"steady_monotonic\",\"hash\":\""<<result.block_hash
+                  <<"\",\"state\":\""<<network::submission_state_name(result.state)<<"\",\"channel_reused\":"<<(result.timing.channel_reused?"true":"false")
+                  <<",\"stream_reused\":"<<(result.timing.stream_reused?"true":"false")
+                  <<",\"assembly_ms\":"<<timing_value(result.timing.assembly_ms)<<",\"validation_ms\":"<<timing_value(result.timing.validation_ms)
+                  <<",\"connect_ms\":"<<timing_value(result.timing.connect_ms)<<",\"stream_ms\":"<<timing_value(result.timing.stream_ms)
+                  <<",\"prepare_ms\":"<<timing_value(result.timing.prepare_ms)<<",\"write_ms\":"<<timing_value(result.timing.write_ms)
+                  <<",\"response_ms\":"<<timing_value(result.timing.response_ms)<<",\"finish_ms\":"<<timing_value(result.timing.finish_ms)
+                  <<",\"total_ms\":"<<timing_value(result.timing.total_ms)<<"}\n"<<std::flush;
+                observe_submission(result);
+              } catch(const std::exception &e) {
+                std::osyncstream(std::cerr)<<"LIVE_H15_SUBMIT_FAILED nonce="<<winning_nonce<<" detail="<<e.what()<<"\n"<<std::flush;
+              }
+              }).share();
             }
+          }
+
+          const auto submission_done=target_met?pending_h15_submit:std::shared_future<void>{};
+          // Submission is scheduled above. These timings measure proof work, not RPC write latency.
+          std::osyncstream(std::cout)<<"{\"event\":\"H15_PROOF_TIMING\",\"nonce\":"<<winning_nonce
+            <<",\"threads\":"<<proof_threads
+            <<",\"diagnostic_ms\":"<<(diagnostic_end_ns-proof_begin_ns)/1e6
+            <<",\"prefetch_ms\":"<<(prefetch_end_ns-diagnostic_end_ns)/1e6
+            <<",\"gather_and_launch_ms\":"<<(gather_end_ns-prefetch_end_ns)/1e6
+            <<",\"cpu_wait_ms\":"<<(parity_end_ns-gather_end_ns)/1e6
+            <<",\"pack_ms\":"<<(pack_end_ns-parity_end_ns)/1e6
+            <<",\"proof_total_ms\":"<<(pack_end_ns-proof_begin_ns)/1e6<<"}\n";
+          // === FORENSIC ARTIFACT PERSISTENCE & RUST VERIFICATION ===
+          const ProofArtifactContext context{seed,gguf.chunk_count(),header.timestamp,winning_nonce,header.daa_score,job.generation,final,header.pom_tier,official_root,target.little_endian,pph,response_digest,pow};
+          const auto artifacts=encode_proof_artifacts(context,diagnostic,wire.size());
+          const auto name=safe_name(job.generation,winning_nonce);
+          const std::array<fs::path,3> paths{outdir/(name+".proof"),outdir/(name+".context"),outdir/(name+".trace")};
+          for(const auto &path:paths)if(fs::exists(path))throw std::runtime_error("H15 proof artifact already exists");
+          if(!startup_parity_verified) {
+            if(submission_done.valid())submission_done.wait();
+            {std::ofstream f(paths[0],std::ios::binary);put(f,wire.data(),wire.size());}
+            {std::ofstream f(paths[1],std::ios::binary);put(f,artifacts.context_prefix.data(),artifacts.context_prefix.size());}
+            {std::ofstream f(paths[2],std::ios::binary);put(f,artifacts.trace.data(),artifacts.trace.size());}
+            RustProofVerifier::Result rust;
+            {
+              std::lock_guard lk(rust_verifier_mutex);
+              rust=rust_verifier.verify(artifacts.context_prefix,artifacts.trace,wire);
+            }
+            (void)rust;
+            release_verified_nonwinner_artifacts(paths,true,target_met);
+            startup_parity_verified=true;telemetry.proof_completed();telemetry.proof_rust_verified();
+            std::cout<<"LIVE_H15_CUDA_NONCE=PASS nonce="<<winning_nonce<<" states=257 offsets=256 rust=PASS target_satisfied="<<(target_met?"true":"false")<<"\n"<<std::flush;
+          } else {
+            proof_auditors.enqueue(submission_done,
+              [paths, wire, artifacts, target_met, winning_nonce, &rust_verifier, &rust_verifier_mutex, &telemetry] {
+                {std::ofstream f(paths[0],std::ios::binary);put(f,wire.data(),wire.size());}
+                {std::ofstream f(paths[1],std::ios::binary);put(f,artifacts.context_prefix.data(),artifacts.context_prefix.size());}
+                {std::ofstream f(paths[2],std::ios::binary);put(f,artifacts.trace.data(),artifacts.trace.size());}
+                RustProofVerifier::Result rust;
+                {
+                  std::lock_guard lk(rust_verifier_mutex);
+                  rust = rust_verifier.verify(artifacts.context_prefix, artifacts.trace, wire);
+                }
+                (void)rust;
+                release_verified_nonwinner_artifacts(paths, true, target_met);
+                telemetry.proof_completed();
+                telemetry.proof_rust_verified();
+                std::osyncstream(std::cout) << "LIVE_H15_CUDA_NONCE=PASS nonce=" << winning_nonce << " states=257 offsets=256 rust=PASS target_satisfied=" << (target_met ? "true" : "false") << "\n" << std::flush;
+              },
+              [&,winning_nonce](std::exception_ptr failure) {
+                proof_audit_failed.store(true,std::memory_order_release);
+                if(submit_client)submit_client->block_new_submissions();
+                telemetry.set_state("ACTIVE","IDLE","PROOF_AUDIT_FAILED","BLOCKED");
+                try{std::rethrow_exception(failure);}catch(const std::exception &e){
+                  std::osyncstream(std::cerr)<<"BACKGROUND_AUDIT_ERROR nonce="<<winning_nonce<<" detail="<<e.what()<<"\n"<<std::flush;
+                }catch(...){std::osyncstream(std::cerr)<<"BACKGROUND_AUDIT_ERROR nonce="<<winning_nonce<<" detail=unknown\n"<<std::flush;}
+              });
+          }
+          }catch(const PrefetchCancelled &e){
+            if(!stop.load()&&!gpu_ownership.opoi_pending()&&ai_requests.size()==0&&job.lease.valid())throw;
+            std::osyncstream(std::cout)<<"H15_PROOF_DISCARDED generation="<<job.generation<<" reason="<<e.what()<<"\n";
           }
           continue;
         }
