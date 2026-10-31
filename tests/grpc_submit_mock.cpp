@@ -156,12 +156,12 @@ public:
         visible_blocks.insert(std::move(hash));
       }
       if(number==5)std::this_thread::sleep_for(std::chrono::milliseconds(1500));
-      protowire::KaspadResponse response;response.set_id(request.id());auto *result=response.mutable_submitblockresponse();
+      protowire::KaspadResponse response;response.set_id(number==8?request.id()+1:request.id());auto *result=response.mutable_submitblockresponse();
       if(number==2)result->set_rejectreason(protowire::SubmitBlockResponseMessage::IS_IN_IBD);
       else if(number==3){result->mutable_error()->set_message("mock node validation error");result->set_rejectreason(protowire::SubmitBlockResponseMessage::NONE);}
       else result->set_rejectreason(protowire::SubmitBlockResponseMessage::NONE);
       if(!stream->Write(response))return grpc::Status(grpc::StatusCode::UNAVAILABLE,"mock response write failed");
-      return grpc::Status::OK;
+      continue;
     }
     return grpc::Status::OK;
   }
@@ -189,8 +189,8 @@ int main(int argc,char**argv){
     }
     if(!found)throw std::runtime_error("no complete synced mainnet capture matches the installed GGUF tier");
     const auto seed_nonce=0x4b45525958535542ULL;
-    std::vector<Fixture>fixtures;fixtures.reserve(7);
-    for(std::uint64_t i=0;i<7;++i)fixtures.push_back(make_fixture(model,merkle,base,base_response,oracle,out,seed_nonce+i,payout,extra));
+    std::vector<Fixture>fixtures;fixtures.reserve(10);
+    for(std::uint64_t i=0;i<10;++i)fixtures.push_back(make_fixture(model,merkle,base,base_response,oracle,out,seed_nonce+i,payout,extra));
 
     SubmitMock mock;
     for(const auto&f:fixtures){const auto assembled=network::assemble_pom_winner(f.template_block,f.winner,payout,extra);mock.expected_blocks.emplace(f.winner.verification.nonce,assembled.SerializeAsString());
@@ -230,6 +230,7 @@ int main(int argc,char**argv){
     const auto ibd=network::submit_pom_winner(client,fixtures[1].template_block,fixtures[1].winner,payout,extra,true);
     if(!ibd.timing.channel_reused||!ibd.timing.total_ms||!ibd.timing.response_ms)throw std::runtime_error("reused-channel reject timing unavailable");
     if(ibd.state!=network::SubmissionState::RpcRejected||ibd.reason!=protowire::SubmitBlockResponseMessage::IS_IN_IBD)throw std::runtime_error("node IBD reject was not preserved as RPC_REJECTED");
+    if(!ibd.timing.stream_reused)throw std::runtime_error("second request did not reuse persistent stream");
     const auto rpc=network::submit_pom_winner(client,fixtures[2].template_block,fixtures[2].winner,payout,extra,true);
     if(rpc.state!=network::SubmissionState::RpcRejected||rpc.node_error!="mock node validation error")throw std::runtime_error("RPCError response was misreported");
     const auto disconnected=network::submit_pom_winner(client,fixtures[3].template_block,fixtures[3].winner,payout,extra,true,std::chrono::seconds(2));
@@ -267,7 +268,23 @@ int main(int argc,char**argv){
     std::cout<<"SUBMISSION_AI_PREEMPTION=PASS cancel_ms="<<cancel_ms<<" outcome=UNKNOWN_OUTCOME duplicate=BLOCKED\n";
     auto malformed=fixtures[0].template_block;malformed.clear_pomproof();
     if(!rejected([&]{(void)client.submit(malformed,fixtures[0].winner.verification,true);},"proof bytes"))throw std::runtime_error("malformed serialization was not rejected");
-    server->Shutdown();
+    const auto mismatch=network::submit_pom_winner(client,fixtures[7].template_block,fixtures[7].winner,payout,extra,true);
+    if(mismatch.state!=network::SubmissionState::UnknownOutcome)throw std::runtime_error("correlation mismatch accepted");
+    const auto recovered=network::submit_pom_winner(client,fixtures[8].template_block,fixtures[8].winner,payout,extra,true);
+    if(recovered.state!=network::SubmissionState::RpcAcknowledged||recovered.timing.stream_reused)throw std::runtime_error("new candidate did not reconnect after broken stream");
+    unsigned freshness_checks=0;
+    fixtures[9].winner.verification.still_current=[&]{return ++freshness_checks==1;};
+    const auto before_expiry=mock.requests.load();
+    const auto expired=network::submit_pom_winner(client,fixtures[9].template_block,fixtures[9].winner,payout,extra,true);
+    if(expired.state!=network::SubmissionState::CandidateValid||freshness_checks!=2||mock.requests.load()!=before_expiry)
+      throw std::runtime_error("lease expiry before Write was not discarded");
+    client.block_new_submissions();
+    const auto before_audit_block=mock.requests.load();
+    const auto blocked=network::submit_pom_winner(client,fixtures[8].template_block,fixtures[8].winner,payout,extra,true);
+    if(blocked.state!=network::SubmissionState::CandidateValid||mock.requests.load()!=before_audit_block)
+      throw std::runtime_error("sticky audit failure allowed a new SubmitBlock request");
+    std::cout<<"PERSISTENT_SUBMIT_STREAM=PASS reuse=true correlation_mismatch=UNKNOWN reconnect_new_candidate=true\n";
+    server->Shutdown(std::chrono::system_clock::now());
     std::cout<<"VALID_POM_PROOF_POSITIVE_MOCK=PASS source=authentic-GGUF CPU-walk Rust-official=PASS target=isolated-test-only bits=0x"<<std::hex<<easy_test_bits<<std::dec
       <<" full_block=header,nonce,pomProof,pomFinalState,serviceStateHash,pomTier,payout_escrow_transactions_preserved="<<fixtures[0].template_block.transactions_size()
       <<" production_helper_invoked=true mock_received_complete_message=true states=RPC_ACKNOWLEDGED,RPC_REJECTED,UNKNOWN_OUTCOME,UNKNOWN_AFTER_TIMEOUT,CHAIN_OBSERVED,CHAIN_CONFIRMED reorg_tracking=PASS gates=target,stale,proof,duplicate,disabled serialization=PASS mainnet_submit=DISABLED artifacts="<<out<<"\n";

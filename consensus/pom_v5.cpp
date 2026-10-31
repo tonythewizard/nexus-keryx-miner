@@ -1,11 +1,45 @@
 #include "keryx/nexus/consensus/pom_v5.hpp"
 #include <algorithm>
+#include <thread>
+#include <mutex>
+#include <deque>
+#include <condition_variable>
+#include <future>
 #include <bit>
 #include <limits>
 #include <stdexcept>
 
 namespace keryx::nexus::consensus {
 namespace {
+// Fixed capacity workers; callers retain their inputs until every task completes.
+class ProofPool {
+  std::mutex mutex;
+  std::condition_variable ready;
+  std::deque<std::packaged_task<void()>> tasks;
+  bool closing=false;
+  std::vector<std::thread> workers;
+public:
+  ProofPool() {
+    try { for(unsigned i=0;i<8;++i) workers.emplace_back([this]{
+      for(;;) {
+        std::packaged_task<void()> task;
+        { std::unique_lock lock(mutex);ready.wait(lock,[&]{return closing||!tasks.empty();});
+          if(closing&&tasks.empty())return;
+          task=std::move(tasks.front());tasks.pop_front(); }
+        task();
+      }
+    }); } catch(...) { shutdown();throw; }
+  }
+  void shutdown() {
+    {std::lock_guard lock(mutex);closing=true;}ready.notify_all();
+    for(auto &worker:workers)if(worker.joinable())worker.join();
+  }
+  ~ProofPool(){shutdown();}
+  std::future<void> submit(std::function<void()> work) {
+    std::packaged_task<void()> task(std::move(work));auto result=task.get_future();
+    {std::lock_guard lock(mutex);tasks.push_back(std::move(task));}ready.notify_one();return result;
+  }
+};
 std::uint64_t load64(const std::uint8_t *p) {
   std::uint64_t v=0;for(unsigned j=0;j<8;++j)v|=std::uint64_t(p[j])<<(8*j);return v;
 }
@@ -78,6 +112,57 @@ V5ModelProofBuild prove_v5_from_model(std::uint64_t seed,std::uint8_t tier,std::
     else {built.proof.tiles.emplace_back();built.proof.paths.emplace_back();}
   }
   return built;
+}
+V5Proof prove_v5_from_walk_parallel(const Walk &walk, std::uint8_t tier,
+    std::uint64_t weights,
+    const ModelTileReader &read_weight, const ModelPathReader &read_path,
+    unsigned num_threads) {
+  if (tier >= 5 || !read_path || !read_weight)
+    throw std::invalid_argument("invalid v5 proof tier or readers");
+  if (walk.offsets.size() != walk_steps)
+    throw std::invalid_argument("invalid walk offsets size");
+
+  V5Proof proof;
+  proof.tier = tier;
+  proof.tiles.resize(walk_steps);
+  proof.paths.resize(walk_steps);
+
+  if (num_threads == 0 || num_threads > 8) throw std::invalid_argument("v5 proof threads must be at most 8");
+
+  static ProofPool pool;
+  const std::size_t chunk_size = (walk_steps + num_threads - 1) / num_threads;
+  std::vector<std::future<void>> futures;
+  futures.reserve(num_threads);
+
+  try {
+  for (unsigned t = 0; t < num_threads; ++t) {
+    const std::size_t start = t * chunk_size;
+    if (start >= walk_steps) break;
+    const std::size_t end = std::min(start + chunk_size, static_cast<std::size_t>(walk_steps));
+
+    futures.push_back(pool.submit([&walk, weights, &read_weight, &read_path, &proof, start, end] {
+      for (std::size_t i = start; i < end; ++i) {
+        const auto off = walk.offsets[i];
+        if (off < weights) {
+          const auto t = read_weight(off);
+          proof.tiles[i].assign(t.begin(), t.end());
+          proof.paths[i] = read_path(off);
+        }
+      }
+    }));
+  }
+
+  } catch(...) {
+    for(auto &f:futures)if(f.valid())f.wait();
+    throw;
+  }
+  std::exception_ptr failure;
+  for(auto &f:futures) {
+    try {f.get();} catch(...) {if(!failure)failure=std::current_exception();}
+  }
+  if(failure)std::rethrow_exception(failure);
+
+  return proof;
 }
 std::vector<std::uint8_t> borsh_v5_container(const V5Proof&p,std::uint64_t state,const Hash&pow) {
   if(p.tier>=5||p.tiles.size()!=walk_steps||p.paths.size()!=walk_steps)throw std::invalid_argument("invalid v5 proof shape");

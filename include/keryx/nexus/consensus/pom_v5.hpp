@@ -29,6 +29,10 @@ Walk walk_v5_from_model(std::uint64_t seed, std::uint64_t weight_tiles,
 V5ModelProofBuild prove_v5_from_model(std::uint64_t seed, std::uint8_t tier,
     std::uint64_t weight_tiles, const V5PadSpec &pad,
     const ModelTileReader &read_weight, const ModelPathReader &read_path);
+V5Proof prove_v5_from_walk_parallel(const Walk &walk, std::uint8_t tier,
+    std::uint64_t weight_tiles,
+    const ModelTileReader &read_weight, const ModelPathReader &read_path,
+    unsigned num_threads = 8);
 std::vector<std::uint8_t> borsh_v5_container(const V5Proof &proof,
                                            std::uint64_t state, const Hash &pow);
 }

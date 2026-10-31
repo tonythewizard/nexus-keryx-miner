@@ -112,6 +112,15 @@ jobs:
           python tests/oracle_negative_suite.py oracle-rust/target/release/nexus-m21-oracle.exe `
             build/windows/test-data/cpp-proof.bin build/windows/test-data
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: H15 parallel proof Borsh parity against the independent verifier
+        shell: pwsh
+        run: |
+          $proofs = @(Get-ChildItem build/windows/test-data/pom-v5/cpu-*.bin)
+          if ($proofs.Count -ne 3) { throw 'Expected three H15 CPU proof fixtures' }
+          $proofs | ForEach-Object {
+            & oracle-rust/target/release/nexus-m21-oracle.exe verify-v5-fixture $_.FullName
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          }
       - name: Native header hashes and journal recovery
         shell: pwsh
         run: |
@@ -260,6 +269,9 @@ jobs:
             -DNEXUS_RUST_ORACLE="$PWD/oracle-rust/target/release/nexus-m21-oracle"
           cmake --build build/linux-cpu --parallel 2
           ctest --test-dir build/linux-cpu --output-on-failure
+          for proof in build/linux-cpu/test-data/pom-v5/cpu-*.bin; do
+            oracle-rust/target/release/nexus-m21-oracle verify-v5-fixture "$proof"
+          done
           python3 tests/oracle_negative_suite.py oracle-rust/target/release/nexus-m21-oracle \
             build/linux-cpu/test-data/cpp-proof.bin build/linux-cpu/test-data
       - name: Restore matching inference runtime
@@ -331,5 +343,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --prerelease \
-            --title "Nexus $GITHUB_REF_NAME — native CLI preview" --notes-file docs/native-preview-notes.md
+          test "$GITHUB_REF_NAME" = "v$(cat VERSION)"
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+            gh release edit "$GITHUB_REF_NAME" --latest --prerelease=false \
+              --title "Nexus $GITHUB_REF_NAME" --notes-file docs/native-preview-notes.md
+          else
+            gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --latest \
+              --title "Nexus $GITHUB_REF_NAME" --notes-file docs/native-preview-notes.md
+          fi

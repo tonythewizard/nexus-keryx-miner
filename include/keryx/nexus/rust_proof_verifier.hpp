@@ -8,6 +8,7 @@
 #include <cerrno>
 #include <csignal>
 #include <memory>
+#include <mutex>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -59,6 +60,7 @@ class RustProofVerifier {
   }
   Result verify(std::span<const std::uint8_t> context,std::span<const std::uint8_t> trace,
                 std::span<const std::uint8_t> proof) {
+    std::lock_guard lock(verify_mutex_);
     if(failed_)throw std::runtime_error("official verifier is failed; no retry permitted");
     try {
       if(context.size()!=225 || trace.size()!=28+257*1024+256*8 || proof.empty() || proof.size()>2*1024*1024)
@@ -94,6 +96,7 @@ class RustProofVerifier {
     } catch(...) {failed_=true;throw;}
   }
  private:
+  std::mutex verify_mutex_;
   template<class T>static void le(T &v,std::size_t p,std::uint64_t x,unsigned n){for(unsigned i=0;i<n;++i)v[p+i]=x>>(8*i);}
   template<class T>static std::uint64_t get(const T &v,std::size_t p,unsigned n){std::uint64_t x=0;for(unsigned i=0;i<n;++i)x|=std::uint64_t(v[p+i])<<(8*i);return x;}
 #ifndef _WIN32

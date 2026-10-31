@@ -1,5 +1,6 @@
 #pragma once
 #include <functional>
+#include <atomic>
 
 #include "keryx/nexus/network/submission_gate.hpp"
 #include "rpc.pb.h"
@@ -34,6 +35,7 @@ struct SubmitBlockResult {
     std::optional<double> assembly_ms, validation_ms, connect_ms, stream_ms, prepare_ms,
                           write_ms, response_ms, finish_ms, total_ms;
     bool channel_reused{};
+    bool stream_reused{};
   } timing;
   SubmissionState state{SubmissionState::CandidateValid};
   std::vector<SubmissionState> transitions;
@@ -52,6 +54,8 @@ struct SubmitBlockResult {
 class SubmitBlockClient final {
 public:
   explicit SubmitBlockClient(std::string endpoint);
+  ~SubmitBlockClient();
+  void block_new_submissions() noexcept { blocked_.store(true,std::memory_order_release); }
   SubmitBlockResult submit(const protowire::RpcBlock &block,
                            const VerifiedSubmission &verified,
                            bool enable_live_submit,
@@ -67,6 +71,11 @@ public:
                                   std::chrono::milliseconds poll_interval = std::chrono::seconds(1),
                                   std::uint64_t confirmation_blue_score_depth = 6);
 private:
+  std::atomic_bool blocked_{false};
+  struct PersistentStream;
+  std::unique_ptr<PersistentStream> stream_;
+  std::mutex stream_mutex_;
+  std::uint64_t next_request_id_{1};
   std::string endpoint_;
   SubmissionGate gate_;
   // Only submit() accesses this channel; observers retain independent streams.

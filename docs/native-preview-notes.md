@@ -17,3 +17,11 @@ for full scope.
 
 Unsigned experimental binaries. Original source GPL-3.0-only; third-party
 notices and runtime licenses included. Automatic updates remain disabled.
+
+This refreshed v0.0.4 includes asynchronous H15 submission, a persistent RPC
+stream, 1–8 proof workers and bounded post-submit Rust audits. An audit failure
+blocks further submissions but cannot recall an already sent candidate. The
+release tag has been updated with the owner's authorization; BUILD.json and
+the bundled source identify the exact refreshed build commit. See
+https://github.com/tonythewizard/nexus-keryx-miner/blob/main/docs/h15-post-submit.md
+for ordering, cancellation and validation details.

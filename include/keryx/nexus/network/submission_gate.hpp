@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <stdexcept>
 #include <string>
 #include <unordered_set>
@@ -23,6 +24,8 @@ struct VerifiedSubmission {
   bool job_fresh{};
   bool generation_matches{};
   bool miner_configured{};
+  // Recheck immediately before writing; expiry after Write must not discard the ACK.
+  std::function<bool()> still_current;
 };
 
 class SubmissionGate final {
@@ -33,7 +36,7 @@ class SubmissionGate final {
     require(candidate.merkle_verified, "Merkle proof not verified");
     require(candidate.header_seed_verified, "header/seed binding not verified");
     require(candidate.target_satisfied, "candidate does not satisfy the network target");
-    require(candidate.job_fresh, "job is stale");
+    require(candidate.job_fresh && (!candidate.still_current || candidate.still_current()), "job is stale");
     require(candidate.generation_matches, "job generation mismatch");
     require(candidate.miner_configured, "authorized miner payout is not configured");
     if (candidate.job_id.empty() || candidate.generation == 0)
