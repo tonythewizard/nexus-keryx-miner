@@ -45,12 +45,17 @@ std::pair<std::string, bool> endpoint_target(const std::string &endpoint) {
   return {target, false};
 }
 
-std::shared_ptr<grpc::Channel> connect(const std::string &endpoint,
-                                       std::chrono::system_clock::time_point deadline) {
+std::shared_ptr<grpc::Channel> make_channel(const std::string &endpoint) {
   const auto [target, tls] = endpoint_target(endpoint);
-  auto channel = grpc::CreateChannel(target, tls
+  return grpc::CreateChannel(target, tls
       ? grpc::SslCredentials(grpc::SslCredentialsOptions{})
       : grpc::InsecureChannelCredentials());
+}
+
+std::shared_ptr<grpc::Channel> connect(const std::string &endpoint,
+                                       std::chrono::system_clock::time_point deadline,
+                                       std::shared_ptr<grpc::Channel> channel = nullptr) {
+  if (!channel) channel = make_channel(endpoint);
   if (!channel->WaitForConnected(deadline))
     throw std::runtime_error("node RPC channel connection timed out before request was sent");
   return channel;
@@ -58,8 +63,9 @@ std::shared_ptr<grpc::Channel> connect(const std::string &endpoint,
 
 protowire::KaspadResponse exchange(const std::string &endpoint,
                                   const protowire::KaspadRequest &request,
-                                  std::chrono::system_clock::time_point deadline) {
-  auto channel = connect(endpoint, deadline);
+                                  std::chrono::system_clock::time_point deadline,
+                                  std::shared_ptr<grpc::Channel> reusable_channel = nullptr) {
+  auto channel = connect(endpoint, deadline, std::move(reusable_channel));
   auto stub = protowire::RPC::NewStub(channel);
   grpc::ClientContext context;
   context.set_deadline(deadline);
@@ -101,12 +107,13 @@ struct BlockObservation {
 
 bool fetch_block(const std::string &endpoint, const std::string &hash,
                  protowire::RpcBlock &block,
-                 std::chrono::system_clock::time_point deadline) {
+                 std::chrono::system_clock::time_point deadline,
+                 const std::shared_ptr<grpc::Channel> &channel = nullptr) {
   protowire::KaspadRequest request;
   request.set_id(1);
   request.mutable_getblockrequest()->set_hash(hash);
   request.mutable_getblockrequest()->set_includetransactions(false);
-  const auto response = exchange(endpoint, std::move(request), deadline);
+  const auto response = exchange(endpoint, std::move(request), deadline, channel);
   if (!response.has_getblockresponse())
     throw std::runtime_error("GetBlock response payload missing");
   const auto &payload = response.getblockresponse();
@@ -128,10 +135,11 @@ bool fetch_block(const std::string &endpoint, const std::string &hash,
 }
 
 BlockObservation observe_once(const std::string &endpoint, const std::string &candidate_hash,
-                              std::chrono::system_clock::time_point deadline) {
+                              std::chrono::system_clock::time_point deadline,
+                              const std::shared_ptr<grpc::Channel> &channel = nullptr) {
   BlockObservation observation;
   protowire::RpcBlock candidate;
-  if (!fetch_block(endpoint, candidate_hash, candidate, deadline)) return observation;
+  if (!fetch_block(endpoint, candidate_hash, candidate, deadline, channel)) return observation;
   observation.found = true;
   observation.selected_chain = candidate.verbosedata().ischainblock();
   observation.blue_score = candidate.verbosedata().bluescore();
@@ -139,14 +147,14 @@ BlockObservation observe_once(const std::string &endpoint, const std::string &ca
   protowire::KaspadRequest dag_request;
   dag_request.set_id(2);
   dag_request.mutable_getblockdaginforequest();
-  const auto dag_response = exchange(endpoint, std::move(dag_request), deadline);
+  const auto dag_response = exchange(endpoint, std::move(dag_request), deadline, channel);
   if (!dag_response.has_getblockdaginforesponse())
     throw std::runtime_error("GetBlockDagInfo response payload missing");
   const auto &dag = dag_response.getblockdaginforesponse();
   if (dag.has_error() || dag.sink().empty())
     throw std::runtime_error("GetBlockDagInfo did not provide the selected sink");
   protowire::RpcBlock sink;
-  if (!fetch_block(endpoint, dag.sink(), sink, deadline))
+  if (!fetch_block(endpoint, dag.sink(), sink, deadline, channel))
     throw std::runtime_error("selected sink was not available through GetBlock");
   observation.selected_tip_blue_score = sink.verbosedata().bluescore();
   return observation;
@@ -309,10 +317,12 @@ SubmitBlockResult SubmitBlockClient::observe_chain(
   const auto deadline = std::chrono::steady_clock::now() + timeout;
   bool ever_observed = false;
   bool previously_selected = false;
+  auto observation_channel = make_channel(endpoint_);
   while (std::chrono::steady_clock::now() < deadline) {
     try {
       const auto observation = observe_once(endpoint_, result.block_hash,
-          std::chrono::system_clock::now() + std::chrono::seconds(3));
+          std::chrono::system_clock::now() + std::chrono::seconds(3),
+          observation_channel);
       if (observation.found) {
         ever_observed = true;
         result.block_blue_score = observation.blue_score;

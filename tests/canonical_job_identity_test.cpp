@@ -1,4 +1,6 @@
+#include "keryx/nexus/consensus/pom_v4.hpp"
 #include "keryx/nexus/grpc_client.hpp"
+#include "keryx/nexus/live_job_queue.hpp"
 #include "messages.pb.h"
 
 #include <functional>
@@ -6,6 +8,24 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+
+namespace {
+keryx::nexus::consensus::Hash reference_job_fingerprint(
+    const keryx::nexus::TemplateFields &fields) {
+  std::vector<std::uint8_t> framed;
+  const auto append_u64 = [&](std::uint64_t x) {
+    for (unsigned i = 0; i < 8; i++)
+      framed.push_back(static_cast<std::uint8_t>(x >> (8 * i)));
+  };
+  append_u64(fields.response_wire.size());
+  framed.insert(framed.end(), fields.response_wire.begin(),
+                fields.response_wire.end());
+  append_u64(fields.block_wire.size());
+  framed.insert(framed.end(), fields.block_wire.begin(),
+                fields.block_wire.end());
+  return keryx::nexus::consensus::blake3_hash(framed);
+}
+} // namespace
 
 int main() {
   try {
@@ -57,8 +77,34 @@ int main() {
       if (canonical == keryx::nexus::canonical_consensus_block_identity(changed))
         throw std::runtime_error(std::string("consensus field omitted from canonical identity: ") + name);
     }
+
+    keryx::nexus::LiveJobQueue queue;
+    keryx::nexus::TemplateFields fields;
+    fields.network = "mainnet";
+    fields.node_synced = true;
+    fields.pay_address = "keryx:test";
+    fields.extra_data = "extra";
+    fields.response_wire = {0x00, 0x01, 0x7f, 0x80, 0xff};
+    fields.block_wire = canonical;
+    fields.consensus_identity_wire = canonical;
+    queue.publish(fields);
+    auto job = *queue.wait_pop();
+    const keryx::nexus::consensus::Hash pph{0xaa, 0xbb, 0xcc};
+    const auto bound = keryx::nexus::consensus::bind_candidate(job, 42, 123456, pph);
+    if (bound.job_fingerprint != reference_job_fingerprint(job.fields))
+      throw std::runtime_error("streaming bind_candidate fingerprint differs from reference framing");
+    if (keryx::nexus::consensus::candidate_binding_status(bound, job) !=
+        keryx::nexus::consensus::CandidateBindingStatus::Valid)
+      throw std::runtime_error("valid candidate binding rejected");
+    auto mutated_job = job;
+    mutated_job.fields.block_wire.back() ^= 1U;
+    if (keryx::nexus::consensus::candidate_binding_status(bound, mutated_job) !=
+        keryx::nexus::consensus::CandidateBindingStatus::IntegrityMismatch)
+      throw std::runtime_error("mutated block_wire accepted by candidate_binding_status");
+
     std::cout << "CANONICAL_JOB_IDENTITY=PASS consensus_fields=" << mutations.size()
-              << " verbose_diagnostics_excluded=true parent_order_preserved=true\n";
+              << " verbose_diagnostics_excluded=true parent_order_preserved=true"
+              << " candidate_binding_stream_parity=true\n";
     return 0;
   } catch (const std::exception &e) {
     std::cerr << "CANONICAL_JOB_IDENTITY=FAIL " << e.what() << '\n';

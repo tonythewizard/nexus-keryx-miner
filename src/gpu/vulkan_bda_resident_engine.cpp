@@ -635,13 +635,6 @@ bool VulkanBdaResidentEngine::run_batch(
         out.diagnostic_states.clear();
     }
 
-    if (diagnostics) {
-        out.diagnostic_states.resize(seeds.size() * 257 * 1024);
-        std::memcpy(out.diagnostic_states.data(), p.buf_trace.mapped, seeds.size() * 257 * 1024);
-    } else {
-        out.diagnostic_states.clear();
-    }
-
     return true;
 }
 

@@ -42,11 +42,13 @@ def main():
                 runtime_info.get('application_abi') != args.runtime_abi or
                 runtime_info.get('candidate_only') is not (args.runtime_abi == 9)):
             raise ValueError('Runtime sidecar does not match the explicitly selected worker runtime ABI')
+    if runtime_info.get('cuda_architectures') != ['sm_86', 'sm_89', 'sm_120']:
+        raise ValueError('Runtime must declare matching RTX 30/40/50 CUDA architectures; rebuild old runtime caches')
     version = (ROOT / 'VERSION').read_text().strip()
     if not re.fullmatch(r'\d+\.\d+\.\d+', version):
         parser.error('invalid source version')
     commit = subprocess.check_output(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], text=True).strip()
-    name = f'nexus-keryx-miner-{version}-{args.platform}-x86_64-cuda-sm86-preview'
+    name = f'nexus-keryx-miner-{version}-{args.platform}-x86_64-cuda-rtx30-40-50-preview'
     args.output.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='package-', dir=args.output) as temporary:
         package = Path(temporary) / name
@@ -98,7 +100,7 @@ def main():
         (package / 'BUILD.json').write_text(json.dumps({
             'version': version, 'commit': commit,
             'source': f'https://github.com/tonythewizard/nexus-keryx-miner/tree/{commit}',
-            'platform': args.platform, 'architecture': 'x86_64', 'cuda_architecture': 'sm_86',
+            'platform': args.platform, 'architecture': 'x86_64', 'cuda_architectures': ['sm_86', 'sm_89', 'sm_120'],
             'inference_source': 'https://github.com/ggml-org/llama.cpp/tree/12127defda4f41b7679cb2477a4b0d65ee6a0c8f',
             'inference_patch_sha256': hashlib.sha256((ROOT / 'vendor/keryx-trace-abi6/tools/keryx-llama/patches/0001-canonical-trace.patch').read_bytes()).hexdigest(),
             'inference_application_abi': runtime_info['application_abi'] if runtime_info else None,

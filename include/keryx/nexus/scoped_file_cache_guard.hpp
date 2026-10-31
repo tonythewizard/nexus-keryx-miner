@@ -41,7 +41,7 @@ public:
             if(error && error!=EAGAIN){error_.store(error);return;}
           }
         }catch(...){error_.store(EIO);return;}
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
       }
     });
     std::cout<<"MINER_FILE_CACHE_GUARD=ACTIVE file_trigger_bytes=268435456 swappiness=0 scope=MINER_ONLY\n"<<std::flush;

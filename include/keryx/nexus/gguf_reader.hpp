@@ -105,6 +105,14 @@ private:
   mutable std::deque<std::uint64_t> path_cache_fifo_;
   mutable std::uint64_t path_cache_hits_{};
   mutable std::uint64_t path_cache_misses_{};
+  struct SlabCacheEntry {
+    std::uint64_t begin{std::numeric_limits<std::uint64_t>::max()};
+    std::uint64_t count{};
+    std::array<consensus::Hash, 64> nodes{};
+  };
+  // Keep the bounded cache off the caller stack (several indexes may coexist).
+  mutable std::vector<SlabCacheEntry> slab_cache_{256};
+  mutable std::size_t slab_cache_cursor_{};
   std::uint64_t count_at(std::uint32_t level) const;
   consensus::Hash read_node(const Checkpoint &checkpoint, std::uint64_t index) const;
   consensus::Hash cached_node(std::uint32_t level, std::uint64_t index) const;

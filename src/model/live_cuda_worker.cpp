@@ -92,7 +92,6 @@
 #ifndef _WIN32
 #include <sys/resource.h>
 #endif
-#include <regex>
 #include <set>
 #include <openssl/evp.h>
 
@@ -804,10 +803,26 @@ int main(int argc,char **argv) {
       }
       if(escrow_claims_enabled&&fs::exists(claim_journal)) {
         std::ifstream prior_claims(claim_journal);std::string line;
-        const std::regex id_pattern("\"txid\":\"([0-9a-f]{64})\"");std::smatch match;
-        while(std::getline(prior_claims,line))if(std::regex_search(line,match,id_pattern)) {
-          if(own_claim_ids.size()>=10000&&!own_claim_ids.contains(match[1].str()))throw std::runtime_error("claim reconciliation history exceeds bounded capacity");
-          own_claim_ids.insert(match[1].str());
+        constexpr std::string_view key="\"txid\":\"";
+        const auto is_lower_hex=[](std::string_view sv) noexcept {
+          return sv.size()==64&&std::all_of(sv.begin(),sv.end(),[](char c){
+            return (c>='0'&&c<='9')||(c>='a'&&c<='f');
+          });
+        };
+        while(std::getline(prior_claims,line)) {
+          for(std::size_t pos=0;(pos=line.find(key,pos))!=std::string::npos;pos+=key.size()) {
+            const auto start=pos+key.size();
+            if(start+64<line.size()&&line[start+64]=='"') {
+              const std::string_view candidate(line.data()+start,64);
+              if(is_lower_hex(candidate)) {
+                const std::string txid(candidate);
+                if(own_claim_ids.size()>=10000&&!own_claim_ids.contains(txid))
+                  throw std::runtime_error("claim reconciliation history exceeds bounded capacity");
+                own_claim_ids.insert(txid);
+                break;
+              }
+            }
+          }
         }
       }
       escrow_watcher = std::make_unique<ai::EscrowWatcher>(escrow_secret, pay, state_path);
@@ -1270,12 +1285,18 @@ int main(int argc,char **argv) {
         return response_result;
       },[&](const protowire::RpcBlock &block,bool) {
         if(block.has_header()) {
-          if(escrow_claims_enabled)for(const auto &tx:block.transactions()) {
-            const auto digest=ai::consensus_transaction_id(tx);if(!digest)continue;
-            const auto txid=hex(digest->data(),digest->size());
-            bool ours=false;{std::lock_guard lock(claim_ids_mutex);ours=own_claim_ids.contains(txid);}
-            if(ours)std::osyncstream(std::cout)<<"ESCROW_CLAIM_CHAIN_OBSERVED txid="<<txid<<" daa="<<block.header().daascore()
-                <<" selected_chain="<<(block.has_verbosedata()&&block.verbosedata().ischainblock()?"true":"false")<<" finality=NOT_ASSERTED\n"<<std::flush;
+          if(escrow_claims_enabled) {
+            bool has_claims=false;
+            {std::lock_guard lock(claim_ids_mutex);has_claims=!own_claim_ids.empty();}
+            if(has_claims)for(const auto &tx:block.transactions()) {
+              if(tx.inputs_size()<1||tx.inputs_size()>87||tx.outputs_size()!=1||
+                 tx.subnetworkid()!="0000000000000000000000000000000000000000")continue;
+              const auto digest=ai::consensus_transaction_id(tx);if(!digest)continue;
+              const auto txid=hex(digest->data(),digest->size());
+              bool ours=false;{std::lock_guard lock(claim_ids_mutex);ours=own_claim_ids.contains(txid);}
+              if(ours)std::osyncstream(std::cout)<<"ESCROW_CLAIM_CHAIN_OBSERVED txid="<<txid<<" daa="<<block.header().daascore()
+                  <<" selected_chain="<<(block.has_verbosedata()&&block.verbosedata().ischainblock()?"true":"false")<<" finality=NOT_ASSERTED\n"<<std::flush;
+            }
           }
           auto prior=ai_current_daa.load(std::memory_order_relaxed);
           while(prior<block.header().daascore()&&!ai_current_daa.compare_exchange_weak(
@@ -1491,6 +1512,9 @@ int main(int argc,char **argv) {
     // Keep one decoded RPC snapshot. Compare the complete wire bytes, not only
     // the generation: duplicate refreshes can replace the RPC envelope.
     PreparedRpcTemplateCache template_cache;
+    const PreparedRpcTemplateCache::Work *active_prepared_template=nullptr;
+    const protowire::RpcBlock *active_block=nullptr;
+    std::uint64_t stale_launches_avoided=0;
     bool startup_parity_verified=false;std::optional<bool> parity_v5;
     bool primary_selection_paused=false;
     startup.record("MINING", StartupResult::Pass, "productive PoM admission enabled");
@@ -1516,9 +1540,12 @@ int main(int argc,char **argv) {
         std::erase_if(chain_observers,[](auto &f){if(f.wait_for(std::chrono::seconds(0))==std::future_status::ready){f.get();return true;}return false;});}
       const auto wait_start_ns=monotonic_ns();
       auto maybe_job=queue.wait_pop_for(std::chrono::milliseconds(reusable_job&&reusable_job->lease.valid()?0:100));
+      const bool adopted_new_job=maybe_job.has_value();
       auto *active_job=select_active_template_job(reusable_job,std::move(maybe_job));
       telemetry.record_template_wait(monotonic_ns()-wait_start_ns);
       if(!active_job) {
+        active_prepared_template=nullptr;
+        active_block=nullptr;
         telemetry.set_gpu_activity("WAITING_TEMPLATE");
         if(queue.closed()) break;
         continue;
@@ -1527,20 +1554,27 @@ int main(int argc,char **argv) {
       const auto &job=*active_job; ++jobs_seen;
       const auto preparation_start_ns=monotonic_ns();
       try {
-        require_mining_eligible(job.fields);
         if(!job.lease.valid()) continue;
-        const auto &block=template_cache.block(job.fields.response_wire);
-        if(!h15_audits)protocol::require_legacy_worker_era("mainnet", block.header().daascore());
+        if(adopted_new_job || !active_prepared_template || !active_block) {
+          require_mining_eligible(job.fields);
+          if(job.fields.pay_address!=pay||!opoi::valid_coinbase_extra_data(job.fields.extra_data,extra))
+            throw std::runtime_error("queued job payout/escrow request binding changed");
+          active_prepared_template=&template_cache.get(job.fields.response_wire);
+          active_block=&template_cache.cached_block();
+          if(!h15_audits)protocol::require_legacy_worker_era("mainnet", active_block->header().daascore());
+          const auto &hdr=active_prepared_template->header;
+          const auto anchor=official_tier_anchor(hdr.daa_score,hdr.pom_tier);
+          if(anchor.root!=official_root||anchor.chunks!=gguf.chunk_count())
+            throw std::runtime_error("live job DAA/tier selects a different installed model");
+          if(active_prepared_template->target.zero)
+            throw std::runtime_error("live job has invalid compact target");
+        }
+        const auto &block=*active_block;
         const bool v5=block.header().daascore()>=pom_v5_activation_daa;
         if(parity_v5!=v5){startup_parity_verified=false;parity_v5=v5;}
-        if(job.fields.pay_address!=pay||!opoi::valid_coinbase_extra_data(job.fields.extra_data,extra))
-          throw std::runtime_error("queued job payout/escrow request binding changed");
-        const auto &prepared_template=template_cache.get(job.fields.response_wire);
+        const auto &prepared_template=*active_prepared_template;
         const auto &header=prepared_template.header;
-        const auto anchor=official_tier_anchor(header.daa_score,header.pom_tier);
-        if(anchor.root!=official_root||anchor.chunks!=gguf.chunk_count()) throw std::runtime_error("live job DAA/tier selects a different installed model");
         const auto &pph=prepared_template.pre_pow; const auto &target=prepared_template.target;
-        if(target.zero) throw std::runtime_error("live job has invalid compact target");
         // A zero nonce limit means continuous live mining.  In that mode each
         // iteration still admits one bounded microbatch; subtracting completed
         // from zero previously produced a zero-sized batch forever.
@@ -1567,7 +1601,12 @@ int main(int argc,char **argv) {
                 submit_enabled?"ARMED":"DISABLED");
           // Wake as soon as a template is published instead of delaying its
           // delivery to AMD until a fixed polling sleep has elapsed.
-          (void)select_active_template_job(reusable_job,queue.wait_pop_for(std::chrono::milliseconds(5)));
+          auto paused_maybe_job=queue.wait_pop_for(std::chrono::milliseconds(5));
+          if(paused_maybe_job.has_value()) {
+            active_prepared_template=nullptr;
+            active_block=nullptr;
+          }
+          (void)select_active_template_job(reusable_job,std::move(paused_maybe_job));
           continue;
         }
 #ifdef NEXUS_ENABLE_SECONDARY_VULKAN
@@ -1678,6 +1717,16 @@ int main(int argc,char **argv) {
             const auto pad=official_v5_pad(header.pom_tier,official_model,official_root);
             if(!resident->v5_ready_for(pad)&&!resident->prepare_v5(pad,[&]{return stop.load()||ai_requests.size()!=0||gpu_ownership.opoi_pending()||!live_selection->allows(LiveGpuSelection::Nvidia,primary_selection_token);}))return;
           }else if(resident->v5_pad_bytes())resident->release_v5();
+          // Preparation may outlive the job admitted by the coordinator.
+          // Skip before launch/accounting; the ticket scope still retires it.
+          if(!job.lease.valid()||!queue.admission_allowed(job.generation)) {
+            ++stale_launches_avoided;
+            if(stale_launches_avoided==1 || stale_launches_avoided%256==0)
+              std::cout<<"CUDA_STALE_LAUNCH_AVOIDED count="<<stale_launches_avoided<<" generation="<<job.generation<<"\n";
+            return;
+          }
+          if(stop.load(std::memory_order_relaxed)||ai_requests.size()!=0||gpu_ownership.opoi_pending()||
+             !live_selection->allows(LiveGpuSelection::Nvidia,primary_selection_token))return;
           telemetry.work_launched(batch_count);
           search=resident->run(pph,header.timestamp,header.daa_score,target.little_endian,batch_start,batch_count);
           telemetry.work_completed(search.completed*walk_steps,search.completed);
@@ -1784,15 +1833,26 @@ int main(int argc,char **argv) {
               const auto &tile=pair[0];
               const auto sibling=(offset^1U)<tile_count?(offset^1U):offset;
               sibling_roots.push_back({sibling,sibling==offset?tile:pair[1]});
-              merkle.prefetch_tile_path(offset);
               return tile;
             });
           });
           if(!gathered)throw PrefetchCancelled("OPoI or shutdown preempted winner gather");
           if(!may_continue()||gpu_ownership.opoi_pending())
             throw PrefetchCancelled("job refresh, OPoI, or shutdown cancelled Merkle root batch");
-          // CPU-only hashing occurs after GPU admission is released. Preserve
-          // every canonical byte and the independent CPU/CUDA/Rust checks.
+          // CPU-only prefetch and hashing occur after GPU admission is released.
+          // Deduplicate level-6 checkpoint slabs so identical 64-node slabs are prefetched once.
+          {
+            std::array<std::uint64_t,walk_steps> prefetched_slabs{};
+            if(p.input.offsets.size()>prefetched_slabs.size())
+              throw std::logic_error("Merkle prefetch exceeds bounded walk");
+            const auto end=std::transform(p.input.offsets.begin(),p.input.offsets.end(),
+                prefetched_slabs.begin(),[](auto offset){return offset/128;});
+            std::sort(prefetched_slabs.begin(),end);
+            const auto unique_end=std::unique(prefetched_slabs.begin(),end);
+            for(auto it=prefetched_slabs.begin();it!=unique_end;++it)
+              merkle.prefetch_tile_path(*it*128);
+          }
+          // Preserve every canonical byte and the independent CPU/CUDA/Rust checks.
           merkle.cache_tile_roots(sibling_roots);
           end=monotonic_ns();cpu_end=thread_cpu_ns();profile_phase(job.generation,nonce,"gguf_gather",phase,end,
                         "\"tiles\":256,\"bytes\":262144",cpu_end-cpu_phase);
@@ -1972,22 +2032,35 @@ int main(int argc,char **argv) {
               header.daa_score,job.generation,final,header.pom_tier,official_root,target.little_endian,
               pph,response_digest,pow};
           const auto artifacts=encode_proof_artifacts(artifact_context,walk,wire.size());
-          {std::ofstream f(proof_path,std::ios::binary);put(f,wire.data(),wire.size());}
-          {std::ofstream f(context_path,std::ios::binary);put(f,artifacts.context_prefix.data(),artifacts.context_prefix.size());put(f,wire.data(),wire.size());}
-          {std::ofstream f(trace_path,std::ios::binary);put(f,artifacts.trace.data(),artifacts.trace.size());}
+          bool artifacts_written_to_disk=false;
+          auto persist_proof_artifacts=[&]{
+            if(artifacts_written_to_disk)return;
+            const auto write_start_ns=monotonic_ns();
+            const auto write_cpu_start_ns=thread_cpu_ns();
+            {std::ofstream f(proof_path,std::ios::binary);put(f,wire.data(),wire.size());}
+            {std::ofstream f(context_path,std::ios::binary);put(f,artifacts.context_prefix.data(),artifacts.context_prefix.size());put(f,wire.data(),wire.size());}
+            {std::ofstream f(trace_path,std::ios::binary);put(f,artifacts.trace.data(),artifacts.trace.size());}
+            artifacts_written_to_disk=true;
+            profile_phase(job.generation,nonce,"artifact_write",write_start_ns,monotonic_ns(),{},thread_cpu_ns()-write_cpu_start_ns);
+          };
           phase_end_ns=monotonic_ns();
-          profile_phase(job.generation,nonce,"artifact_write",phase_ns,phase_end_ns,{},thread_cpu_ns()-phase_cpu_ns);
           if(!job.lease.valid()) {
-            if(!target_met){fs::remove(proof_path);fs::remove(context_path);fs::remove(trace_path);}
+            if(target_met)persist_proof_artifacts();
             telemetry.proof_stale();
             std::cout<<"LIVE_CUDA_STALE_DISCARD generation="<<job.generation<<" nonce="<<nonce
-                     <<" stage=after_artifact_write elapsed_ms="<<(monotonic_ns()-nonce_started_ns)/1.0e6
+                     <<" stage=after_artifact_encode elapsed_ms="<<(monotonic_ns()-nonce_started_ns)/1.0e6
                      <<" target_satisfied="<<(target_met?"true":"false")
                      <<" rust=NOT_RUN submit=DISABLED proof_preserved="<<(target_met?"true":"false")<<"\n"<<std::flush;
             break;
           }
           const auto rust_start_ns=monotonic_ns();
-          const auto rust_result=rust_verifier.verify(artifacts.context_prefix,artifacts.trace,wire);
+          decltype(rust_verifier.verify(artifacts.context_prefix,artifacts.trace,wire)) rust_result;
+          try {
+            rust_result=rust_verifier.verify(artifacts.context_prefix,artifacts.trace,wire);
+          } catch(...) {
+            persist_proof_artifacts();
+            throw;
+          }
           const auto rust_child_cpu_ms=rust_result.cpu_ms;
           std::cout<<rust_result.summary<<"\n"<<std::flush;
           telemetry.proof_rust_verified();
@@ -2001,12 +2074,12 @@ int main(int argc,char **argv) {
           if(!current_after_rust) {
             if(!target_met) {
               telemetry.proof_stale();
-              fs::remove(proof_path);fs::remove(context_path);fs::remove(trace_path);
               std::cout<<"LIVE_CUDA_STALE_DISCARD generation="<<job.generation<<" nonce="<<nonce
                        <<" stage=after_rust_verify rust_verify_ms="<<rust_verify_ms
                        <<" elapsed_ms="<<(monotonic_ns()-nonce_started_ns)/1.0e6<<"\n"<<std::flush;
               break;
             }
+            persist_proof_artifacts();
             std::cout<<"LIVE_CUDA_STALE_WINNER_VERIFIED generation="<<job.generation<<" nonce="<<nonce
                      <<" rust=PASS target_satisfied=true submit=DISABLED proof_preserved=true\n"<<std::flush;
             break;
@@ -2026,8 +2099,9 @@ int main(int argc,char **argv) {
           if(target_met) {
             if(!live_selection->allows(LiveGpuSelection::Nvidia,primary_selection_token)||!job.lease.valid()||stop.load(std::memory_order_relaxed)||
                !queue.submission_allowed(job.generation))
-              { std::cout<<"LIVE_CUDA_STALE_WINNER_VERIFIED generation="<<job.generation<<" nonce="<<nonce<<" stage=submission_gate rust=PASS submit=DISABLED\n"<<std::flush;break; }
+              { persist_proof_artifacts(); std::cout<<"LIVE_CUDA_STALE_WINNER_VERIFIED generation="<<job.generation<<" nonce="<<nonce<<" stage=submission_gate rust=PASS submit=DISABLED\n"<<std::flush;break; }
             if(!submit_enabled) {
+              persist_proof_artifacts();
               std::cout<<"LIVE_SUBMIT=DISABLED_WINNER candidate_valid=true client_invoked=false\n"<<std::flush;
             } else {
             network::VerifiedSubmission verified;
@@ -2047,9 +2121,17 @@ int main(int argc,char **argv) {
             network::PomWinner winner{std::move(verified),header.daa_score,final,
                                       header.pom_tier,proof_bytes};
             telemetry.set_state("ACTIVE", "IDLE", "", "SUBMIT_SENT");
-            const auto result=network::submit_pom_winner(
-                  *submit_client,block,winner,job.fields.pay_address,
-                  job.fields.extra_data,submit_enabled);
+            const auto result=[&] {
+              try {
+                return network::submit_pom_winner(
+                    *submit_client,block,winner,job.fields.pay_address,
+                    job.fields.extra_data,submit_enabled);
+              } catch (...) {
+                persist_proof_artifacts();
+                throw;
+              }
+            }();
+              persist_proof_artifacts();
               telemetry.set_state("ACTIVE", "IDLE", "", network::submission_state_name(result.state));
               std::osyncstream(std::cout)<<"LIVE_SUBMIT_RESULT state="<<network::submission_state_name(result.state)
                        <<" node_error_hex="<<hex(reinterpret_cast<const std::uint8_t*>(result.node_error.data()),std::min<std::size_t>(result.node_error.size(),1024))<<" reject_reason="<<result.reason<<" hash="<<result.block_hash<<" nonce="<<nonce<<" submit=ENABLED\n"<<std::flush;

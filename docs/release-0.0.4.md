@@ -3,9 +3,19 @@
 This release brings the upstream H15 protocol integration, native ABI9 CUDA
 worker path, recovery fixes and complete-session logs into the public source
 baseline. The Windows x64 and Linux x86-64 downloads remain unsigned experimental
-CLI packages for NVIDIA SM 8.6, with external models, trees, node/IPFS and keys.
+CLI packages for NVIDIA RTX 30/40/50 (SM 8.6, 8.9 and 12.0), with external
+models, trees, node/IPFS and keys.
 
 ## Changes
+
+- Native PoM and resident-solver device images cover SM 8.6, 8.9 and 12.0.
+  The ABI9 inference runtime covers the same generations (llama.cpp uses
+  SM120a for Blackwell). Explicit UUID, configured model, exclusive ownership,
+  architecture admission and independent proof checks remain required.
+  Packaging rejects old runtime sidecars with incomplete architecture coverage.
+- Resident CUDA staging/address preparation, CPU walk dispatch, bounded Merkle
+  caching and RPC/template handling include the current candidate optimizations.
+  These changes carry no general throughput improvement claim.
 
 - Native v5 proof verification, traced sequence/attention/recurrent inference,
   audit phase scheduling, durable trace/opening recovery and node-ledger
@@ -34,7 +44,12 @@ The desktop UI is available in source and is not included in these CLI archives.
 Linux development validation includes real GPU inference, H15 shadow/recovery
 and independent proof checks, plus H14 mainnet acceptance for the functional
 candidate. Those local results do not certify GPU execution of every CI-built
-archive. Windows GPU execution, live H15 chain acceptance and a real nonempty
+archive. RTX 40/50 hardware execution and low-VRAM models remain unvalidated.
+Architecture support does not waive memory admission or provide a new low-VRAM
+fallback. The latest isolated Linux multi-architecture worker/runtime pair
+compiled successfully, passed offline ABI9 and CPU configuration checks, and
+contains the three device image sets; no GPU execution of that exact pair was
+performed. Windows GPU execution, live H15 chain acceptance and a real nonempty
 node 1.6.6 audit ledger remain unvalidated. RPC acknowledgements are not chain
 finality or proof of a paid AI response. Arbitrary multi-GPU scheduling, native
 Windows desktop, AMD/macOS packages and automatic installation are not provided.

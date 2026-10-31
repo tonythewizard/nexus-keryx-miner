@@ -194,6 +194,22 @@ std::vector<Hash> fold(std::vector<Hash> level) {
         hash_pair(level[i], i + 1 < level.size() ? level[i + 1] : level[i]));
   return next;
 }
+Hash compute_job_fingerprint(const TemplateFields &fields) noexcept {
+  Hash out{};
+  blake3_hasher h;
+  blake3_hasher_init(&h);
+  std::array<std::uint8_t, 8> len_buf{};
+  store_le64(len_buf.data(), fields.response_wire.size());
+  blake3_hasher_update(&h, len_buf.data(), len_buf.size());
+  if (!fields.response_wire.empty())
+    blake3_hasher_update(&h, fields.response_wire.data(), fields.response_wire.size());
+  store_le64(len_buf.data(), fields.block_wire.size());
+  blake3_hasher_update(&h, len_buf.data(), len_buf.size());
+  if (!fields.block_wire.empty())
+    blake3_hasher_update(&h, fields.block_wire.data(), fields.block_wire.size());
+  blake3_hasher_finalize(&h, out.data(), out.size());
+  return out;
+}
 } // namespace
 std::uint64_t mix64(std::uint64_t x) noexcept {
   x ^= x >> 30;
@@ -263,21 +279,12 @@ CandidateBinding bind_candidate(const TemplateJob &job, std::uint64_t nonce,
   if (!job.lease.valid() || job.lease.generation() != job.generation)
     throw std::invalid_argument(
         "cannot bind a candidate to an inactive template lease");
-  std::vector<std::uint8_t> bytes;
-  bytes.reserve(job.fields.response_wire.size() + job.fields.block_wire.size() +
-                16);
-  append_u64(bytes, job.fields.response_wire.size());
-  bytes.insert(bytes.end(), job.fields.response_wire.begin(),
-               job.fields.response_wire.end());
-  append_u64(bytes, job.fields.block_wire.size());
-  bytes.insert(bytes.end(), job.fields.block_wire.begin(),
-               job.fields.block_wire.end());
   CandidateBinding c;
   c.generation = job.generation;
   c.nonce = nonce;
   c.timestamp = timestamp;
   c.pre_pow_hash = pph;
-  c.job_fingerprint = blake3_hash(bytes);
+  c.job_fingerprint = compute_job_fingerprint(job.fields);
   c.lease = job.lease;
   return c;
 }
@@ -292,22 +299,9 @@ CandidateBindingStatus candidate_binding_status(const CandidateBinding &c,
   if (c.generation != job.generation ||
       c.lease.generation() != job.lease.generation())
     return CandidateBindingStatus::IntegrityMismatch;
-  try {
-    std::vector<std::uint8_t> bytes;
-    bytes.reserve(job.fields.response_wire.size() +
-                  job.fields.block_wire.size() + 16);
-    append_u64(bytes, job.fields.response_wire.size());
-    bytes.insert(bytes.end(), job.fields.response_wire.begin(),
-                 job.fields.response_wire.end());
-    append_u64(bytes, job.fields.block_wire.size());
-    bytes.insert(bytes.end(), job.fields.block_wire.begin(),
-                 job.fields.block_wire.end());
-    return blake3_hash(bytes) == c.job_fingerprint
-        ? CandidateBindingStatus::Valid
-        : CandidateBindingStatus::IntegrityMismatch;
-  } catch (...) {
-    return CandidateBindingStatus::IntegrityMismatch;
-  }
+  return compute_job_fingerprint(job.fields) == c.job_fingerprint
+      ? CandidateBindingStatus::Valid
+      : CandidateBindingStatus::IntegrityMismatch;
 }
 
 std::array<std::uint64_t,25> seed_sponge_state(const Hash &original_pph, std::uint64_t timestamp, std::uint64_t daa) {
@@ -451,32 +445,15 @@ Walk walk_v4(std::uint64_t seed, std::span<const std::uint8_t> blob) {
   Walk out;
   out.states.resize(257);
   out.offsets.reserve(256);
-  auto &init = out.states[0];
-  for (std::size_t r = 0; r < 32; r++) {
-    std::uint64_t h = mix64(seed ^ (s0_salt + r));
-    for (std::size_t k = 0; k < 8; k++) {
-      h = mix64(h);
-      auto v = static_cast<std::uint32_t>(h);
-      for (unsigned i = 0; i < 4; i++)
-        init[r * 32 + k * 4 + i] = static_cast<std::uint8_t>(v >> (8 * i));
-    }
-  }
+  out.states[0] = v4_initial_state_bytes(seed);
+  const auto step_function = v4_step_scalar;
   std::uint64_t offset = mix64(seed ^ first_salt) % ntiles;
   for (std::uint32_t step = 1; step <= 256; step++) {
     out.offsets.push_back(offset);
     const auto *tile = blob.data() + offset * 1024;
     const auto &src = out.states[step - 1];
     auto &dst = out.states[step];
-    for (std::uint32_t r = 0; r < 32; r++)
-      for (std::uint32_t c = 0; c < 32; c++) {
-        std::int32_t acc = 0;
-        for (std::uint32_t k = 0; k < 32; k++)
-          acc += static_cast<std::int32_t>(
-                     std::bit_cast<std::int8_t>(src[r * 32 + k])) *
-                 static_cast<std::int32_t>(
-                     std::bit_cast<std::int8_t>(tile[c * 32 + k]));
-        dst[r * 32 + c] = rho8(acc, rho_tweak(step, r, c));
-      }
+    step_function(src.data(), dst.data(), tile, step);
     if (step < 256) {
       std::span<const std::uint8_t, 32> snippet(tile, 32);
       offset = mix64(seed ^ ((std::uint64_t(step + 1) * step_salt)) ^
@@ -490,13 +467,18 @@ ModelProofBuild prove_v4_from_model(std::uint64_t seed,std::uint8_t tier,std::ui
   if(tier>=5)throw std::out_of_range("mainnet PoM tier index outside 0..4");
   if(ntiles==0||!read_tile||!read_path)throw std::invalid_argument("invalid model proof source");
   ModelProofBuild built;auto &w=built.walk;w.states.resize(257);w.offsets.reserve(256);
-  auto &init=w.states[0];for(std::size_t r=0;r<32;r++){std::uint64_t h=mix64(seed^(s0_salt+static_cast<std::uint64_t>(r)));for(std::size_t k=0;k<8;k++){h=mix64(h);const auto v=static_cast<std::uint32_t>(h);for(unsigned i=0;i<4;i++)init[r*32+k*4+i]=static_cast<std::uint8_t>(v>>(i*8));}}
+  w.states[0]=v4_initial_state_bytes(seed);
+  const auto step_function=v4_step_dispatch();
   std::uint64_t offset=mix64(seed^first_salt)%ntiles;std::vector<std::array<std::uint8_t,tile_bytes>> tiles;tiles.reserve(256);
   for(std::uint32_t step=1;step<=256;step++){
-    auto tile=read_tile(offset);w.offsets.push_back(offset);std::array<std::uint8_t,32> snippet{};std::copy_n(tile.data(),snippet.size(),snippet.data());
-    const auto &src=w.states[step-1];auto &dst=w.states[step];for(std::uint32_t r=0;r<32;r++)for(std::uint32_t c=0;c<32;c++){std::int32_t acc=0;for(std::uint32_t k=0;k<32;k++)acc+=static_cast<std::int32_t>(std::bit_cast<std::int8_t>(src[r*32+k]))*static_cast<std::int32_t>(std::bit_cast<std::int8_t>(tile[c*32+k]));dst[r*32+c]=rho8(acc,rho_tweak(step,r,c));}
+    auto tile=read_tile(offset);w.offsets.push_back(offset);
+    const auto &src=w.states[step-1];auto &dst=w.states[step];
+    step_function(src.data(),dst.data(),tile.data(),step);
+    if(step<256){
+      std::span<const std::uint8_t,32> snippet(tile.data(),32);
+      offset=mix64(seed^(static_cast<std::uint64_t>(step+1)*step_salt)^snippet_fold(snippet))%ntiles;
+    }
     tiles.push_back(tile);
-    if(step<256)offset=mix64(seed^(static_cast<std::uint64_t>(step+1)*step_salt)^snippet_fold(snippet))%ntiles;
   }
   built.proof.tier=tier;built.proof.tiles=std::move(tiles);built.proof.paths.reserve(256);
   for(const auto off:w.offsets)built.proof.paths.push_back(read_path(off));
@@ -532,16 +514,7 @@ Walk walk_v4_from_tile_sequence(std::uint64_t seed, std::uint64_t ntiles,
   Walk out;
   out.states.resize(walk_steps + 1);
   out.offsets.reserve(walk_steps);
-  auto &initial = out.states[0];
-  for (std::size_t r = 0; r < 32; ++r) {
-    auto h = mix64(seed ^ (s0_salt + static_cast<std::uint64_t>(r)));
-    for (std::size_t k = 0; k < 8; ++k) {
-      h = mix64(h);
-      const auto word = static_cast<std::uint32_t>(h);
-      for (unsigned b = 0; b < 4; ++b)
-        initial[r * 32 + k * 4 + b] = static_cast<std::uint8_t>(word >> (8 * b));
-    }
-  }
+  out.states[0] = v4_initial_state_bytes(seed);
   const auto step_function = v4_step_dispatch();
   auto offset = mix64(seed ^ first_salt) % ntiles;
   for (std::uint32_t step = 1; step <= walk_steps; ++step) {
@@ -579,13 +552,14 @@ V4Proof prove_v4_from_walk(const Walk &walk, std::uint8_t tier,
   return proof;
 }
 std::uint64_t final_state_from_bytes(std::span<const std::uint8_t, 1024> bytes) {
-  std::vector<Hash> level;
-  level.reserve(32);
+  std::array<Hash, 32> level{};
   for (std::size_t r = 0; r < 32; r++)
-    level.push_back(blake3_hash(
-        std::span<const std::uint8_t>(bytes.data() + r * 32, 32)));
-  while (level.size() > 1)
-    level = fold(std::move(level));
+    level[r] = blake3_hash(
+        std::span<const std::uint8_t>(bytes.data() + r * 32, 32));
+  for (std::size_t width = 32; width > 1; width >>= 1) {
+    for (std::size_t i = 0; i < width; i += 2)
+      level[i / 2] = hash_pair(level[i], level[i + 1]);
+  }
   return load_le64(level[0].data());
 }
 std::uint64_t final_state(const Walk &w) {

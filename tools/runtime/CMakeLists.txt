@@ -2,11 +2,11 @@ cmake_minimum_required(VERSION 3.25)
 # Share the CUDA and MSVC runtimes across the wrapper and static backends.
 set(CMAKE_CUDA_RUNTIME_LIBRARY Shared)
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+include("${CMAKE_CURRENT_LIST_DIR}/../cmake/cuda-architectures.cmake")
 project(nexus_inference_runtime LANGUAGES C CXX CUDA)
 include(FetchContent)
 find_package(Git REQUIRED)
 find_package(CUDAToolkit 13 REQUIRED)
-set(CMAKE_CUDA_ARCHITECTURES 86)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 set(GGML_CUDA ON CACHE BOOL "" FORCE)
@@ -91,6 +91,7 @@ set(nexus_runtime_metadata [=[{
   "application_abi": @NEXUS_RUNTIME_ABI@,
   "candidate_only": @NEXUS_CANDIDATE_ONLY@,
   "force_mmq": true,
+  "cuda_architectures": ["sm_86", "sm_89", "sm_120"],
   "build_policy_miner_commit": "7a9a39355a298250de28ce823a749a30e6f3405f",
   "wrapper_sha256": "@NEXUS_WRAPPER_SHA256@",
   "patch_set_sha256": "@NEXUS_PATCH_SET_SHA256@",
