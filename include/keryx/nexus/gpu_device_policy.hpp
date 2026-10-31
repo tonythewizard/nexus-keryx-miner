@@ -15,12 +15,16 @@ inline GpuBackend parse_gpu_backend(const char* value) {
 
 // The UUID gate remains authoritative for physical identity. Model and SM
 // checks additionally bind the optimized kernel to the locally configured card.
+inline constexpr bool supported_cuda_architecture(int major, int minor) {
+  return (major == 8 && (minor == 6 || minor == 9)) || (major == 12 && minor == 0);
+}
+
 inline void require_cuda_model(std::string_view actual_name, int major, int minor,
                                const char* configured_name) {
   if (!configured_name || !*configured_name)
     throw std::runtime_error("Explicit NEXUS_PRIMARY_GPU_NAME required for CUDA model admission");
-  if (actual_name != configured_name || major != 8 || minor != 6)
-    throw std::runtime_error("CUDA PoM requires the configured GPU model and SM 8.6");
+  if (actual_name != configured_name || !supported_cuda_architecture(major, minor))
+    throw std::runtime_error("CUDA PoM requires the configured GPU model and SM 8.6, 8.9 or 12.0");
 }
 
 // Routing policy, not a claim that all CUDA or Vulkan devices are validated.

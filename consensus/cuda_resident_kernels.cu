@@ -220,6 +220,33 @@ extern "C" __global__ void nexus_tile_folds(
     folds[tile]=sf;
 }
 
+// Warp-cooperative tile address resolution: lane 0 checks whether all 32 chunks
+// of `tile_index` lie within the same canonical tensor. When true (>99.99% of
+// tiles), lane 0 broadcasts the contiguous tile base pointer to all 32 lanes,
+// avoiding 31 redundant LUT/prefix/base global memory lookups per step. Tiles
+// straddling a tensor boundary fall back to exact per-lane resolution.
+__device__ __forceinline__ const ulonglong2* v4_chunk_addr_warp(
+    const unsigned long long* bases, const unsigned long long* prefix, unsigned int T,
+    const unsigned short* lut, unsigned int lut_sh,
+    unsigned long long tile_index, unsigned int lane) {
+    unsigned long long contiguous_tile_base = 0ULL;
+    if (lane == 0u) {
+        const unsigned long long idx0 = tile_index * (unsigned long long)V4_TILE_CHUNKS;
+        unsigned int lo = __ldg(&lut[idx0 >> lut_sh]);
+        while (lo + 1 < T && __ldg(&prefix[lo + 1]) <= idx0) lo++;
+        const unsigned long long p_lo = __ldg(&prefix[lo]);
+        const unsigned long long p_hi = (lo + 1 < T) ? __ldg(&prefix[lo + 1]) : (idx0 + V4_TILE_CHUNKS);
+        if (idx0 + V4_TILE_CHUNKS <= p_hi) {
+            contiguous_tile_base = __ldg(&bases[lo]) + (idx0 - p_lo) * 32ULL;
+        }
+    }
+    contiguous_tile_base = __shfl_sync(0xFFFFFFFFu, contiguous_tile_base, 0);
+    if (contiguous_tile_base != 0ULL) {
+        return reinterpret_cast<const ulonglong2*>(contiguous_tile_base) + lane * 2ULL;
+    }
+    return v4_chunk_addr_lut(bases, prefix, T, lut, lut_sh, tile_index, lane);
+}
+
 // Reconstruct one candidate's canonical offset chain from immutable folds.
 // This does not decide target validity or replace CPU/Rust verification.
 extern "C" __global__ void nexus_witness_offsets(
@@ -261,6 +288,8 @@ extern "C" __global__ void nexus_resident_search_preseeded(
     const unsigned long long* h10_state, unsigned int seed_h10,
     const unsigned long long* h10_seeds, unsigned int seed_precomputed,
     const unsigned long long* tile_folds) {
+    (void)h10_state;
+    (void)seed_h10;
     extern __shared__ unsigned int s_shared[];
     const unsigned int w = threadIdx.x >> 5;
     const unsigned int x = threadIdx.x & 31u;
@@ -272,10 +301,9 @@ extern "C" __global__ void nexus_resident_search_preseeded(
     unsigned int* s_tiles = s_warp + 256u;
 
     const unsigned long long nonce = nonce_base + i;
-    // Every lane needs the identical seed and the H10 seed is a full keccak: compute it once
-    // on lane 0 and broadcast.
+    // Every lane needs the identical seed; H10 seeds are precomputed by nexus_h10_seeds.
     unsigned long long seed = (x == 0u)
-        ? (seed_precomputed ? h10_seeds[i] : (seed_h10 ? pom_seed_h10(nonce, h10_state) : pom_seed_fold(nonce, time_, s0, s1, s2, s3)))
+        ? (seed_precomputed ? __ldg(&h10_seeds[i]) : pom_seed_fold(nonce, time_, s0, s1, s2, s3))
         : 0ULL;
     seed = __shfl_sync(0xFFFFFFFFu, seed, 0);
     { unsigned long long h = mix64(seed ^ (V4_S0_ROW_SALT + (unsigned long long)x));
@@ -284,37 +312,39 @@ extern "C" __global__ void nexus_resident_search_preseeded(
     __syncwarp();
 
     unsigned long long off = v4_barrett_mod(mix64(seed ^ V4_OFFSET_FIRST_SALT), n_tiles, inv_n);
+    unsigned long long cur_fold = (x == 0u) ? __ldg(&tile_folds[off]) : 0ULL;
     {
-        const ulonglong2* q = v4_chunk_addr_lut(bases, prefix, T, lut, lut_sh, off, x);
+        const ulonglong2* q = v4_chunk_addr_warp(bases, prefix, T, lut, lut_sh, off, x);
         ulonglong2* dst = (ulonglong2*)(s_tiles + 260u + x * 8);   // tile 1 -> buffer (1&1)=1
         v4_cp_async16(dst, q); v4_cp_async16(dst + 1, q + 1);
-        if(x==0u)v4_cp_async16(s_tiles+260u+256u,tile_folds+(off&~1ULL));
         asm volatile("cp.async.commit_group;");
     }
     for (unsigned int step = 1; step <= K; step++) {
         unsigned int* cur = s_tiles + (step & 1u) * 260u;
-        asm volatile("cp.async.wait_group 0;");
-        __syncwarp();
         if (step < K) {
             // The next tile offset is identical for every lane of this nonce.
-            // Compute the serial fold once and broadcast the exact 64-bit result.
+            // Issue the next tile's cp.async BEFORE waiting on the current tile's shared memory.
             unsigned long long next_off = 0;
             if (x == 0u) {
-                const auto sf=reinterpret_cast<const unsigned long long*>(cur+256u)[off&1u];
                 next_off = v4_barrett_mod(
-                    mix64(seed ^ (unsigned long long)(step + 1) * V4_OFFSET_STEP_SALT ^ sf),
+                    mix64(seed ^ (unsigned long long)(step + 1) * V4_OFFSET_STEP_SALT ^ cur_fold),
                     n_tiles, inv_n);
+                cur_fold = __ldg(&tile_folds[next_off]);
             }
             off = __shfl_sync(0xFFFFFFFFu, next_off, 0);
-            const ulonglong2* q = v4_chunk_addr_lut(bases, prefix, T, lut, lut_sh, off, x);
+            const ulonglong2* q = v4_chunk_addr_warp(bases, prefix, T, lut, lut_sh, off, x);
             ulonglong2* dst = (ulonglong2*)(s_tiles + ((step + 1u) & 1u) * 260u + x * 8);
             v4_cp_async16(dst, q); v4_cp_async16(dst + 1, q + 1);
-            if(x==0u)v4_cp_async16(s_tiles+((step+1u)&1u)*260u+256u,tile_folds+(off&~1ULL));
         }
         asm volatile("cp.async.commit_group;");
+        if (step < K) {
+            asm volatile("cp.async.wait_group 1;");
+        } else {
+            asm volatile("cp.async.wait_group 0;");
+        }
+        __syncwarp();
         v4_imma_step(s_state, cur, step, x);
     }
-    asm volatile("cp.async.wait_group 0;");
     __syncwarp();
 
     // root_K + fold, verbatim reference tail.
@@ -378,6 +408,8 @@ extern "C" __global__ void nexus_resident_search_v5(
     const unsigned long long* tile_folds,
     unsigned long long n_pad, unsigned long long inv_pad, unsigned int pad_steps,
     unsigned long long* diagnostic_offsets, unsigned int* diagnostic_states) {
+    (void)h10_state;
+    (void)seed_h10;
     extern __shared__ unsigned int s_shared[];
     const unsigned int w = threadIdx.x >> 5;
     const unsigned int x = threadIdx.x & 31u;
@@ -389,10 +421,9 @@ extern "C" __global__ void nexus_resident_search_v5(
     unsigned int* s_tiles = s_warp + 256u;
 
     const unsigned long long nonce = nonce_base + i;
-    // Every lane needs the identical seed and the H10 seed is a full keccak: compute it once
-    // on lane 0 and broadcast.
+    // Every lane needs the identical seed; H10 seeds are precomputed by nexus_h10_seeds.
     unsigned long long seed = (x == 0u)
-        ? (seed_precomputed ? h10_seeds[i] : (seed_h10 ? pom_seed_h10(nonce, h10_state) : pom_seed_fold(nonce, time_, s0, s1, s2, s3)))
+        ? (seed_precomputed ? __ldg(&h10_seeds[i]) : pom_seed_fold(nonce, time_, s0, s1, s2, s3))
         : 0ULL;
     seed = __shfl_sync(0xFFFFFFFFu, seed, 0);
     { unsigned long long h = mix64(seed ^ (V4_S0_ROW_SALT + (unsigned long long)x));
@@ -405,7 +436,7 @@ extern "C" __global__ void nexus_resident_search_v5(
     }
     unsigned long long off = v4_barrett_mod(mix64(seed ^ V4_OFFSET_FIRST_SALT), n_tiles, inv_n);
     {
-        const ulonglong2* q = v4_chunk_addr_lut(bases, prefix, T, lut, lut_sh, off, x);
+        const ulonglong2* q = v4_chunk_addr_warp(bases, prefix, T, lut, lut_sh, off, x);
         ulonglong2* dst = (ulonglong2*)(s_tiles + 260u + x * 8);   // tile 1 -> buffer (1&1)=1
         v4_cp_async16(dst, q); v4_cp_async16(dst + 1, q + 1);
         if(x==0u && off<n_tiles)v4_cp_async16(s_tiles+260u+256u,tile_folds+(off&~1ULL));
@@ -431,7 +462,7 @@ extern "C" __global__ void nexus_resident_search_v5(
                 next_off=is_pad?n_tiles+v4_barrett_mod(raw,n_pad,inv_pad):v4_barrett_mod(raw,n_tiles,inv_n);
             }
             off = __shfl_sync(0xFFFFFFFFu, next_off, 0);
-            const ulonglong2* q = v4_chunk_addr_lut(bases, prefix, T, lut, lut_sh, off, x);
+            const ulonglong2* q = v4_chunk_addr_warp(bases, prefix, T, lut, lut_sh, off, x);
             ulonglong2* dst = (ulonglong2*)(s_tiles + ((step + 1u) & 1u) * 260u + x * 8);
             v4_cp_async16(dst, q); v4_cp_async16(dst + 1, q + 1);
             if(x==0u && off<n_tiles)v4_cp_async16(s_tiles+((step+1u)&1u)*260u+256u,tile_folds+(off&~1ULL));
@@ -465,3 +496,5 @@ extern "C" __global__ void nexus_resident_search_v5(
         if (pom_le_leq(pv, t0, t1, t2, t3)) atomicMin(winner, nonce);
     }
 }
+
+#include "resident_path_pipeline.cuh"

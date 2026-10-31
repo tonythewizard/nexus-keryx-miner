@@ -1,6 +1,7 @@
 #include "keryx/nexus/developer_config.hpp"
 #include "keryx/nexus/consensus/cuda_resident.hpp"
 #include <cuda.h>
+#include "keryx/nexus/gpu_device_policy.hpp"
 #include <algorithm>
 #include <array>
 #include <cstring>
@@ -39,7 +40,8 @@ struct V5Resources {
   std::uint64_t reciprocal{};
 };
 struct Resources {CUcontext context{};CUmodule module{};CUstream stream{};CUevent begin{},end{};
-  ~Resources(){if(context)cuCtxSetCurrent(context);if(stream)cuStreamSynchronize(stream);if(begin)cuEventDestroy(begin);if(end)cuEventDestroy(end);if(stream)cuStreamDestroy(stream);if(module)cuModuleUnload(module);}
+  void *pinned_host{};
+  ~Resources(){if(context)cuCtxSetCurrent(context);if(stream)cuStreamSynchronize(stream);if(pinned_host)cuMemFreeHost(pinned_host);if(begin)cuEventDestroy(begin);if(end)cuEventDestroy(end);if(stream)cuStreamDestroy(stream);if(module)cuModuleUnload(module);}
 };
 std::uint64_t le64(const std::uint8_t *p){std::uint64_t v=0;for(unsigned i=0;i<8;++i)v|=std::uint64_t(p[i])<<(8*i);return v;}
 }
@@ -47,6 +49,8 @@ struct CudaResidentSearch::Impl {
   Context ctx; // last released: model context is never reset
   std::vector<Buffer> uploads;
   Buffer bases,prefix,lut,winner,sponge,h10_seeds,tile_folds,witness_offsets,witness_pairs;
+  Buffer path_metadata,path_addresses;
+  CUfunction path_kernel{},metadata_kernel{},prepare_paths_kernel{};
   ResidentWitnessTiles host_witness; // One bounded staging buffer; released with PoM on AI preemption.
   std::unique_ptr<V5Resources> v5;
   Resources resources;
@@ -56,6 +60,10 @@ struct CudaResidentSearch::Impl {
   std::uint64_t tiles{},reciprocal{};
   std::vector<std::uint64_t> canonical_bases,canonical_prefix;
   std::vector<std::uint16_t> host_lut;
+  Hash cached_sponge_pph{};
+  std::uint64_t cached_sponge_timestamp{};
+  std::uint64_t cached_sponge_daa{};
+  bool sponge_valid{false};
   Impl(const std::string &uuid,const model::ReadOnlyGguf &gguf,const std::vector<opoi::ResidentTensor>&tensors){
     const char *visible=std::getenv("CUDA_VISIBLE_DEVICES");
     if(uuid!=primary_gpu_uuid()||!visible||uuid!=visible)throw std::runtime_error("resident solver requires exclusive authorized GPU UUID");
@@ -64,7 +72,8 @@ struct CudaResidentSearch::Impl {
     check(cuDeviceGet(&ctx.device,0),"select visible device");CUuuid id{};check(cuDeviceGetUuid(&id,ctx.device),"verify UUID");
     if(uuid_text(id)!=uuid)throw std::runtime_error("resident solver UUID mismatch");
     int major=0,minor=0;check(cuDeviceGetAttribute(&major,CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR,ctx.device),"SM major");check(cuDeviceGetAttribute(&minor,CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR,ctx.device),"SM minor");
-    if(major!=8||minor!=6)throw std::runtime_error("resident solver requires SM86");
+    char device_name[256]{};check(cuDeviceGetName(device_name,sizeof(device_name),ctx.device),"GPU model");
+    require_cuda_model(device_name,major,minor,std::getenv("NEXUS_PRIMARY_GPU_NAME"));
     check(cuDevicePrimaryCtxRetain(&ctx.value,ctx.device),"retain shared primary context");ctx.retained=true;
     check(cuCtxSetCurrent(ctx.value),"bind shared primary context");resources.context=ctx.value;
     const auto &canonical=gguf.canonical_tensors();
@@ -111,7 +120,7 @@ struct CudaResidentSearch::Impl {
     this->host_lut=host_lut;
     bases.allocate(host_bases.size()*8);prefix.allocate(host_prefix.size()*8);lut.allocate(host_lut.size()*2);winner.allocate(8);sponge.allocate(25*8);h10_seeds.allocate(18432*8);
     check(cuMemcpyHtoD(bases.ptr,host_bases.data(),host_bases.size()*8),"copy tensor descriptors");check(cuMemcpyHtoD(prefix.ptr,host_prefix.data(),host_prefix.size()*8),"copy canonical prefix");check(cuMemcpyHtoD(lut.ptr,host_lut.data(),host_lut.size()*2),"copy chunk LUT");
-    check(cuModuleLoadData(&resources.module,_binary_nexus_resident_cubin_start),"load resident SM86 cubin");check(cuModuleGetFunction(&kernel,resources.module,"nexus_resident_search_preseeded"),"resident kernel entry point");
+    check(cuModuleLoadData(&resources.module,_binary_nexus_resident_cubin_start),"load resident multi-architecture CUDA image");check(cuModuleGetFunction(&kernel,resources.module,"nexus_resident_search_preseeded"),"resident kernel entry point");
     check(cuModuleGetFunction(&v5_kernel,resources.module,"nexus_resident_search_v5"),"v5 resident kernel entry point");
     check(cuModuleGetFunction(&pad_fill_kernel,resources.module,"nexus_v5_pad_fill"),"v5 pad fill entry point");
     check(cuModuleGetFunction(&seed_kernel,resources.module,"nexus_h10_seeds"),"H10 seed entry point");
@@ -126,9 +135,13 @@ struct CudaResidentSearch::Impl {
     tile_folds.allocate(fold_bytes);
     if(fold_bytes>tiles*8)check(cuMemsetD8(tile_folds.ptr+tiles*8,0,fold_bytes-tiles*8),"initialize tile fold padding");
     check(cuStreamCreate(&resources.stream,CU_STREAM_NON_BLOCKING),"resident stream");check(cuEventCreate(&resources.begin,0),"resident begin event");check(cuEventCreate(&resources.end,0),"resident end event");
+    check(cuMemHostAlloc(&resources.pinned_host,256,0),"allocate pinned host staging");
     void *fold_params[]={&bases.ptr,&prefix.ptr,&tensor_count,&tiles,&lut.ptr,&shift,&tile_folds.ptr};
     check(cuLaunchKernel(fold_kernel,static_cast<unsigned>((tiles+127)/128),1,1,128,1,1,0,resources.stream,fold_params,nullptr),"prepare immutable tile folds");
     check(cuStreamSynchronize(resources.stream),"complete immutable tile folds");
+    check(cuModuleGetFunction(&path_kernel,resources.module,"path_register_search"),"v4 path search entry point");
+    check(cuModuleGetFunction(&metadata_kernel,resources.module,"build_metadata"),"v4 metadata entry point");
+    check(cuModuleGetFunction(&prepare_paths_kernel,resources.module,"prepare_paths"),"v4 paths entry point");
     // Check folds at every tensor boundary plus dispersed deterministic samples.
     auto verify_fold=[&](std::uint64_t tile){
       if(tile>=tiles)return; // incomplete canonical tail is committed but never walked
@@ -140,7 +153,7 @@ struct CudaResidentSearch::Impl {
     };
     for(std::size_t j=0;j<canonical_bases.size();++j){verify_fold(canonical_prefix[j]/32);verify_fold((canonical_prefix[j+1]-1)/32);}
     for(std::uint64_t i=0;i<129;++i)verify_fold(i*(tiles-1)/128);
-    std::cout<<"RESIDENT_MODEL=PASS tensors="<<tensor_count<<" borrowed_device_tensors="<<borrowed<<" host_uploaded_bytes="<<host_uploaded<<" byte_gate=all_tensor_boundaries_plus_129 primary_context=shared kernel=SM86_INT8_NCF seed=H10_PRECOMPUTED scratch_bytes=147456 tile_fold_bytes="<<fold_bytes<<" fold_gate=all_tensor_boundaries_plus_129\n"<<std::flush;
+    std::cout<<"RESIDENT_MODEL=PASS tensors="<<tensor_count<<" borrowed_device_tensors="<<borrowed<<" host_uploaded_bytes="<<host_uploaded<<" byte_gate=all_tensor_boundaries_plus_129 primary_context=shared kernel=CUDA_INT8_NCF seed=H10_PRECOMPUTED scratch_bytes=147456 tile_fold_bytes="<<fold_bytes<<" fold_gate=all_tensor_boundaries_plus_129\n"<<std::flush;
   }
 };
 CudaResidentSearch::CudaResidentSearch(const std::string &u,const model::ReadOnlyGguf &g,const std::vector<opoi::ResidentTensor>&t):impl_(std::make_unique<Impl>(u,g,t)){}
@@ -292,14 +305,41 @@ ResidentSearchResult CudaResidentSearch::run_impl(const Hash &pph,std::uint64_t 
   auto &p=*impl_;check(cuCtxSetCurrent(p.ctx.value),"bind resident context on current thread");
   if((daa>=pom_v5_activation_daa)!=bool(p.v5))throw std::logic_error("resident pad/PoM era mismatch; v5 must be prepared explicitly");
   if(trace && (!p.v5||count!=1))throw std::invalid_argument("diagnostics require exactly one v5 walk");
+  if(!p.v5 && !p.path_metadata.ptr) {
+    // Bound admission before allocation; these buffers share the solver lifetime
+    // and are released when AI preemption destroys the resident solver.
+    const auto metadata_bytes=p.tiles*16;
+    constexpr std::size_t path_bytes=18432ULL*256*8;
+    std::size_t free=0,total=0;check(cuMemGetInfo(&free,&total),"v4 path VRAM budget");
+    if(free<metadata_bytes+path_bytes+64ULL*1024*1024)
+      throw std::runtime_error("insufficient VRAM for bounded v4 address pipeline");
+    p.path_addresses.allocate(path_bytes);
+    p.path_metadata.allocate(metadata_bytes);
+    void *metadata_params[]={&p.bases.ptr,&p.prefix.ptr,&p.tensor_count,&p.tiles,&p.lut.ptr,&p.shift,&p.tile_folds.ptr,&p.path_metadata.ptr};
+    check(cuLaunchKernel(p.metadata_kernel,static_cast<unsigned>((p.tiles+127)/128),1,1,128,1,1,0,p.resources.stream,metadata_params,nullptr),"build immutable v4 address metadata");
+    check(cuStreamSynchronize(p.resources.stream),"complete immutable v4 address metadata");
+    std::cout<<"V4_PATH_PIPELINE=READY metadata_bytes="<<metadata_bytes<<" path_bytes="<<path_bytes<<" kernel=register_double_buffer"<<std::endl;
+  }
   Buffer trace_offsets,trace_states;
   if(trace){trace_offsets.allocate(walk_steps*8);trace_states.allocate((walk_steps+1)*tile_bytes);}
   auto bases=p.v5?p.v5->bases.ptr:p.bases.ptr;
   auto prefix=p.v5?p.v5->prefix.ptr:p.prefix.ptr;
   auto lut=p.v5?p.v5->lut.ptr:p.lut.ptr;
   auto tensors=p.v5?p.v5->tensor_count:p.tensor_count;
-  const auto state=seed_sponge_state(pph,timestamp,daa);check(cuMemcpyHtoD(p.sponge.ptr,state.data(),200),"copy seed sponge");
-  const std::uint64_t none=UINT64_MAX;check(cuMemcpyHtoD(p.winner.ptr,&none,8),"reset winner");
+  auto *pinned_words=static_cast<std::uint64_t*>(p.resources.pinned_host);
+  auto *pinned_sponge=pinned_words;
+  auto *pinned_winner=pinned_words+25;
+  if(!p.sponge_valid||p.cached_sponge_pph!=pph||p.cached_sponge_timestamp!=timestamp||p.cached_sponge_daa!=daa){
+    const auto state=seed_sponge_state(pph,timestamp,daa);
+    std::memcpy(pinned_sponge,state.data(),200);
+    check(cuMemcpyHtoDAsync(p.sponge.ptr,pinned_sponge,200,p.resources.stream),"copy seed sponge");
+    p.cached_sponge_pph=pph;
+    p.cached_sponge_timestamp=timestamp;
+    p.cached_sponge_daa=daa;
+    p.sponge_valid=true;
+  }
+  const std::uint64_t none=UINT64_MAX;
+  check(cuMemsetD32Async(p.winner.ptr,0xFFFFFFFFu,2,p.resources.stream),"reset winner");
   constexpr std::uint64_t salt[4]={0x7C99D381176D4EC4ULL,0xC2E28E3E28118C36ULL,0xD496CE1B129B76CAULL,0x47CF0979FA580BCEULL};
   std::uint64_t words[4],targets[4],unused[4]{};for(unsigned i=0;i<4;++i){words[i]=le64(pph.data()+8*i)^salt[i];targets[i]=le64(target.data()+8*i);}
   std::uint32_t k=256,seed_h10=1,precomputed=1;
@@ -309,15 +349,27 @@ ResidentSearchResult CudaResidentSearch::run_impl(const Hash &pph,std::uint64_t 
   // makes its output visible without a host or device-wide synchronization.
   void *seed_params[]={&p.sponge.ptr,&start,&count,&p.h10_seeds.ptr};
   check(cuLaunchKernel(p.seed_kernel,static_cast<unsigned>((count+127)/128),1,1,128,1,1,0,p.resources.stream,seed_params,nullptr),"prepare H10 seeds");
-  std::vector<void*> launch_params(std::begin(params),std::end(params));
-  if(p.v5) {
-    launch_params.insert(launch_params.end(),{&p.v5->spec.tiles,&p.v5->reciprocal,&p.v5->pad_steps,&trace_offsets.ptr,&trace_states.ptr});
+  if(!p.v5) {
+    void *path_params[]={&p.h10_seeds.ptr,&p.tiles,&p.reciprocal,&p.path_metadata.ptr,&count,&p.path_addresses.ptr};
+    check(cuLaunchKernel(p.prepare_paths_kernel,static_cast<unsigned>((count+63)/64),1,1,64,1,1,0,p.resources.stream,path_params,nullptr),"prepare v4 tile addresses");
   }
-  check(cuLaunchKernel(p.v5?p.v5_kernel:p.kernel,static_cast<unsigned>((count+3)/4),1,1,128,1,1,12416,p.resources.stream,launch_params.data(),nullptr),"launch resident PoM");
+  // Driver copies the argument values during launch; no per-batch heap storage is needed.
+  std::array<void*,std::size(params)+5> launch_params{};
+  auto extra_params=std::copy(std::begin(params),std::end(params),launch_params.begin());
+  if(p.v5) {
+    void *v5_params[]={&p.v5->spec.tiles,&p.v5->reciprocal,&p.v5->pad_steps,&trace_offsets.ptr,&trace_states.ptr};
+    std::copy(std::begin(v5_params),std::end(v5_params),extra_params);
+  } else {
+    launch_params[28]=&p.path_metadata.ptr;
+    launch_params[29]=&p.path_addresses.ptr;
+  }
+  check(cuLaunchKernel(p.v5?p.v5_kernel:p.path_kernel,static_cast<unsigned>((count+3)/4),1,1,128,1,1,p.v5?12416:8320,p.resources.stream,launch_params.data(),nullptr),"launch resident PoM");
+  *pinned_winner=none;
+  check(cuMemcpyDtoHAsync(pinned_winner,p.winner.ptr,8,p.resources.stream),"read winning nonce");
   check(cuEventRecord(p.resources.end,p.resources.stream),"record resident completion");if(after_enqueue){const auto status=cuEventQuery(p.resources.end);if(status!=CUDA_SUCCESS&&status!=CUDA_ERROR_NOT_READY)check(status,"resident completion query");after_enqueue(status==CUDA_ERROR_NOT_READY);}
   check(cuEventSynchronize(p.resources.end),"complete resident PoM");
   float elapsed=0;check(cuEventElapsedTime(&elapsed,p.resources.begin,p.resources.end),"resident kernel elapsed");
-  std::uint64_t found=none;check(cuMemcpyDtoH(&found,p.winner.ptr,8),"read winning nonce");
+  const std::uint64_t found=*pinned_winner;
   if(found!=none&&(found<start||found-start>=count))throw std::runtime_error("resident GPU returned out-of-range nonce");
   if(trace){trace->offsets.resize(walk_steps);trace->states.resize(walk_steps+1);
     check(cuMemcpyDtoH(trace->offsets.data(),trace_offsets.ptr,walk_steps*8),"read v5 diagnostic offsets");

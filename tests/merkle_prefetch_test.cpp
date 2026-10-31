@@ -4,6 +4,8 @@
 #include <filesystem>
 #include <chrono>
 using namespace keryx::nexus;
+static_assert(sizeof(model::SparseMerkleIndex) < 16 * 1024,
+              "Merkle caches must not consume the caller stack");
 static void u32(std::ofstream&o,std::uint32_t v){for(int i=0;i<4;i++)o.put(char(v>>(8*i)));}
 static void u64(std::ofstream&o,std::uint64_t v){for(int i=0;i<8;i++)o.put(char(v>>(8*i)));}
 int main(int argc,char**argv){try{

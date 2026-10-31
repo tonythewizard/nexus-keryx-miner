@@ -28,6 +28,10 @@ public:
   const protowire::RpcBlock &block(const std::vector<std::uint8_t> &wire) {
     return rpc_.block(wire);
   }
+  const protowire::RpcBlock &cached_block() const {
+    return rpc_.cached_block();
+  }
+  std::uint64_t revision() const noexcept { return revision_; }
 private:
   RpcTemplateCache rpc_;
   std::optional<Work> work_;

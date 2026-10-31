@@ -32,6 +32,23 @@ int main(int argc, char **argv) {
       runtime.use_task_context();
       resident = std::make_unique<consensus::CudaResidentSearch>(
           primary_gpu_uuid(), gguf, runtime.resident_tensors());
+      consensus::Hash v4_pph{};v4_pph.fill(static_cast<uint8_t>(42+cycles));
+      const auto v4_nonce=12340+cycles;
+      const auto v4_daa=consensus::pom_v5_activation_daa-1;
+      const auto v4_seed=consensus::block_seed(v4_pph,1700000123,v4_nonce,v4_daa);
+      const auto v4_cpu=consensus::prove_v4_from_model(v4_seed,0,gguf.chunk_count()/32,
+          [&](auto off){std::array<uint8_t,consensus::tile_bytes> tile{};gguf.read_tile_into(off,tile);return tile;},
+          [&](auto off){return merkle.tile_path(off);});
+      auto v4_target=consensus::pom_pow_value_h3(consensus::final_state(v4_cpu.walk),v4_pph);
+      if(resident->run(v4_pph,1700000123,v4_daa,v4_target,v4_nonce,1).winner!=v4_nonce)
+        throw std::runtime_error("v4 pipeline exact target rejected");
+      for(auto &byte:v4_target){if(byte--!=0)break;}
+      if(resident->run(v4_pph,1700000123,v4_daa,v4_target,v4_nonce,1).winner)
+        throw std::runtime_error("v4 pipeline below target accepted");
+      consensus::Hash zero_target{};
+      const auto v4_batch=resident->run(v4_pph,1700000123,v4_daa,zero_target,v4_nonce,4608);
+      if(v4_batch.winner)throw std::runtime_error("unexpected zero-target winner");
+      std::cout<<"V4_RUNTIME_PIPELINE=PASS cycle="<<cycles<<" exact_target=true below_target=true batch_ms="<<v4_batch.kernel_ms<<std::endl;
       const auto root =
           consensus::official_tier_anchor(consensus::pom_v5_activation_daa, 0)
               .root;

@@ -2,6 +2,21 @@
 #include <algorithm>
 #include <iostream>
 using namespace keryx::nexus::consensus;
+static std::uint64_t reference_final_state(std::span<const std::uint8_t, 1024> bytes) {
+  std::vector<Hash> nodes;
+  for (std::size_t i = 0; i < bytes.size(); i += 32)
+    nodes.push_back(blake3_hash(bytes.subspan(i, 32)));
+  while (nodes.size() > 1) {
+    std::vector<Hash> parents;
+    for (std::size_t i = 0; i < nodes.size(); i += 2)
+      parents.push_back(hash_pair(nodes[i], nodes[i + 1]));
+    nodes = std::move(parents);
+  }
+  std::uint64_t result = 0;
+  for (unsigned i = 0; i < 8; ++i)
+    result |= std::uint64_t(nodes.front()[i]) << (8 * i);
+  return result;
+}
 int main() {
   try {
     unsigned cases = 0;
@@ -28,6 +43,18 @@ int main() {
         const auto actual = walk_v4_from_tile_sequence(seed, ntiles, input.tiles);
         if (actual.states != scalar.states || actual.offsets != scalar.offsets || actual.offsets != input.offsets)
           throw std::runtime_error("CPU dispatch differs from independent scalar walk");
+        const auto proved = prove_v4_from_model(
+            seed, 3, ntiles,
+            [&](auto off) {
+              std::array<std::uint8_t, tile_bytes> tile{};
+              std::copy_n(blob.data() + off * tile_bytes, tile_bytes, tile.data());
+              return tile;
+            },
+            [&](auto) { return std::vector<Hash>{}; });
+        if (proved.walk.states != scalar.states || proved.walk.offsets != scalar.offsets)
+          throw std::runtime_error("prove_v4_from_model differs from independent scalar walk");
+        if (final_state_from_bytes(actual.states.back()) != reference_final_state(scalar.states.back()))
+          throw std::runtime_error("final_state_from_bytes mismatch");
         ++cases;
       }
     }

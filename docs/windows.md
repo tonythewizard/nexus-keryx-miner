@@ -34,7 +34,7 @@ wallet delegation, signing and recovery checks remain enforced by the worker.
 Verify the archive with PowerShell:
 
 ```powershell
-Get-FileHash .\nexus-keryx-miner-*-windows-x86_64-cuda-sm86-preview.zip -Algorithm SHA256
+Get-FileHash .\nexus-keryx-miner-*-windows-x86_64-cuda-rtx30-40-50-preview.zip -Algorithm SHA256
 ```
 
 Compare the value with the accompanying `.sha256` file. After extraction,

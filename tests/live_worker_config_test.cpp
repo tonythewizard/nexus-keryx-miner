@@ -44,12 +44,12 @@ int main() {
    if(!blocked)throw std::runtime_error("unvalidated production backend admitted");
  }
  require_production_gpu_backend("cuda-driver",uuid.c_str(),uuid);
- require_cuda_model("Configured CUDA device",8,6,"Configured CUDA device");
- for(const auto *name:{static_cast<const char*>(nullptr),"","Different CUDA device"}) {
-   bool blocked=false;try{require_cuda_model("Configured CUDA device",8,6,name);}catch(const std::exception&){blocked=true;}
-   if(!blocked)throw std::runtime_error("missing or mismatched local GPU model accepted");
+ for(const auto [major,minor]:{std::pair{8,6},std::pair{8,9},std::pair{12,0}}) {
+   require_cuda_model("Configured CUDA device",major,minor,"Configured CUDA device");
+   for(const auto *name:{static_cast<const char*>(nullptr),"","Different CUDA device"})
+     rejected_ai([&]{require_cuda_model("Configured CUDA device",major,minor,name);});
  }
- for(const auto [major,minor]:{std::pair{8,5},std::pair{7,6},std::pair{9,0}}) {
+ for(const auto [major,minor]:{std::pair{8,5},std::pair{7,6},std::pair{9,0},std::pair{8,0},std::pair{12,1},std::pair{13,0}}) {
    bool blocked=false;try{require_cuda_model("Configured CUDA device",major,minor,"Configured CUDA device");}catch(const std::exception&){blocked=true;}
    if(!blocked)throw std::runtime_error("unsupported CUDA architecture accepted");
  }

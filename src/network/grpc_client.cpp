@@ -230,6 +230,49 @@ TemplateFields read_template(const google::protobuf::Message &template_response,
                              const Response &envelope, const std::string &network,
                              const std::string &pay_address,
                              const std::string &extra_data) {
+  if (const auto *typed = dynamic_cast<const protowire::GetBlockTemplateResponseMessage *>(&template_response)) {
+    if (!typed->has_block())
+      throw std::runtime_error("template response has no block");
+    const auto &block = typed->block();
+    if (!block.has_header())
+      throw std::runtime_error("template block has no header");
+    const auto &header = block.header();
+
+    TemplateFields result;
+    result.network = network;
+    result.pay_address = pay_address;
+    result.extra_data = extra_data;
+    const auto response_bytes = envelope.SerializeAsString();
+    const auto block_bytes = block.SerializeAsString();
+    result.response_wire.assign(response_bytes.begin(), response_bytes.end());
+    result.block_wire.assign(block_bytes.begin(), block_bytes.end());
+    // RpcBlock.verboseData contains diagnostics (difficulty, DAG labels, etc.)
+    // which are not consensus inputs. Fingerprint every remaining block field,
+    // including the complete header, parent set, transaction bodies, PoM fields,
+    // and protobuf unknown fields.
+    if (!block.has_verbosedata()) {
+      result.consensus_identity_wire = result.block_wire;
+    } else {
+      result.consensus_identity_wire = canonical_consensus_block_identity(block);
+    }
+    result.daa_score = header.daascore();
+    result.compact_target_bits = header.bits();
+    result.timestamp = static_cast<std::uint64_t>(header.timestamp());
+    result.template_nonce = header.nonce();
+    result.header_hash_field = header.hash();
+    result.node_synced = typed->issynced();
+    result.inference_challenge = typed->inferencechallenge();
+    result.received_monotonic_ns = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+    for (const auto &level : header.parents()) {
+      for (const auto &parent_hash : level.parenthashes()) {
+        result.parent_hashes.push_back(parent_hash);
+      }
+    }
+    return result;
+  }
+
   const auto *block_field = field(template_response, "block");
   if (!block_field || !template_response.GetReflection()->HasField(template_response, block_field))
     throw std::runtime_error("template response has no block");
@@ -281,6 +324,20 @@ TemplateFields read_template(const google::protobuf::Message &template_response,
 
 std::vector<std::uint8_t> canonical_consensus_block_identity(
     const google::protobuf::Message &block) {
+  if (const auto *typed = dynamic_cast<const protowire::RpcBlock *>(&block)) {
+    if (!typed->has_verbosedata()) {
+      std::string bytes;
+      if (!typed->SerializeToString(&bytes))
+        throw std::runtime_error("could not serialize canonical consensus block identity");
+      return {bytes.begin(), bytes.end()};
+    }
+    protowire::RpcBlock canonical(*typed);
+    canonical.clear_verbosedata();
+    std::string bytes;
+    if (!canonical.SerializeToString(&bytes))
+      throw std::runtime_error("could not serialize canonical consensus block identity");
+    return {bytes.begin(), bytes.end()};
+  }
   std::unique_ptr<google::protobuf::Message> canonical(block.New());
   canonical->CopyFrom(block);
   if (const auto *verbose = field(*canonical, "verboseData"))
@@ -583,7 +640,7 @@ int run_client(const std::string &endpoint, const std::string &pay_address,
                     << " lease=active submit=DISABLED\n" << std::flush;
           backoff_ms = 250;
           if (max_templates != 0 && templates_this_run >= max_templates) break;
-        } else if (payload(response, "newBlockTemplateNotification")) {
+        } else if (response.has_newblocktemplatenotification()) {
           chain_notices.clear();
           ++notification_epoch;
           if (live_queue) {
@@ -597,28 +654,22 @@ int run_client(const std::string &endpoint, const std::string &pay_address,
           }
           if (template_pending) obsolete_response = true;
           else if (!network.empty()) request_template();
-        } else if (const auto *chain_notice = payload(response, "virtualChainChangedNotification")) {
-          const auto *removed = field(*chain_notice, "removedChainBlockHashes");
-          const auto *added = field(*chain_notice, "addedChainBlockHashes");
-          const auto *reflection = chain_notice->GetReflection();
-          const bool chain_changed = !removed || !added ||
-              reflection->FieldSize(*chain_notice, removed)!=0 || reflection->FieldSize(*chain_notice, added)!=0;
-          const auto classification=chain_notices.observe(chain_notice->SerializeAsString(),chain_changed);
+        } else if (response.has_virtualchainchangednotification()) {
+          const auto &chain_notice = response.virtualchainchangednotification();
+          const bool chain_changed =
+              chain_notice.removedchainblockhashes_size() != 0 ||
+              chain_notice.addedchainblockhashes_size() != 0;
+          const auto classification = chain_notices.observe(chain_notice.SerializeAsString(), chain_changed);
           if(classification==ChainNoticeFilter::Result::Duplicate) {
             std::cout<<"CHAIN_NOTIFICATION_DUPLICATE action=ignored exact_wire=true\n"<<std::flush;
             response.Clear();continue;
           }
           ++notification_epoch;
-          if (ai_removed_chain_observer) {
-            const auto *notification = payload(response, "virtualChainChangedNotification");
-            const auto *removed_field = notification ? field(*notification, "removedChainBlockHashes") : nullptr;
+          if (ai_removed_chain_observer && chain_notice.removedchainblockhashes_size() > 0) {
             std::vector<std::string> removed;
-            if (removed_field) {
-              const auto *reflection = notification->GetReflection();
-              const auto count = reflection->FieldSize(*notification, removed_field);
-              removed.reserve(static_cast<std::size_t>(count));
-              for (int i = 0; i < count; ++i)
-                removed.push_back(reflection->GetRepeatedString(*notification, removed_field, i));
+            removed.reserve(static_cast<std::size_t>(chain_notice.removedchainblockhashes_size()));
+            for (const auto &hash : chain_notice.removedchainblockhashes()) {
+              removed.push_back(hash);
             }
             if (!removed.empty()) {
               try { ai_removed_chain_observer(removed); }
@@ -638,39 +689,28 @@ int run_client(const std::string &endpoint, const std::string &pay_address,
           } else {
             pipeline.invalidate();
           }
-          const auto *notification = payload(response, "virtualChainChangedNotification");
-          const auto *added_field = notification ? field(*notification, "addedChainBlockHashes") : nullptr;
-          if (added_field) {
-            const auto *reflection = notification->GetReflection();
-            const auto count = reflection->FieldSize(*notification, added_field);
-            for (int i = 0; i < count; ++i) {
-              const auto hash = reflection->GetRepeatedString(*notification, added_field, i);
-              if (hash.empty()) continue;
-              const auto id = next_id++;
-              send(get_block_request(id, hash));
-              block_fetches.emplace(id, false);
-              std::cout << "ESCROW_CHAIN_GETBLOCK_SENT id=" << id << "\n" << std::flush;
-            }
+          for (const auto &hash : chain_notice.addedchainblockhashes()) {
+            if (hash.empty()) continue;
+            const auto id = next_id++;
+            send(get_block_request(id, hash));
+            block_fetches.emplace(id, false);
+            std::cout << "ESCROW_CHAIN_GETBLOCK_SENT id=" << id << "\n" << std::flush;
           }
           if (template_pending) obsolete_response = true;
           else if (!network.empty()) request_template();
-        } else if (const auto *added = payload(response, "blockAddedNotification")) {
+        } else if (response.has_blockaddednotification()) {
           chain_notices.clear();
           ++notification_epoch;
-          const auto *block_field = field(*added, "block");
-          protowire::RpcBlock added_block;
-          if (block_field && added->GetReflection()->HasField(*added, block_field)) {
-            const auto &wire_block = added->GetReflection()->GetMessage(*added, block_field);
-            if (const auto *typed = dynamic_cast<const protowire::RpcBlock *>(&wire_block)) {
-              added_block.CopyFrom(*typed);
-              if (added_block.transactions_size() > 0) {
-                observe_block(added_block, false);
-              } else if (added_block.has_verbosedata() && !added_block.verbosedata().hash().empty()) {
-                const auto id = next_id++;
-                send(get_block_request(id, added_block.verbosedata().hash()));
-                block_fetches.emplace(id, false);
-                std::cout << "AI_BLOCK_GETBLOCK_SENT id=" << id << " source=block_added\n" << std::flush;
-              }
+          const auto &added = response.blockaddednotification();
+          if (added.has_block()) {
+            const auto &added_block = added.block();
+            if (added_block.transactions_size() > 0) {
+              observe_block(added_block, false);
+            } else if (added_block.has_verbosedata() && !added_block.verbosedata().hash().empty()) {
+              const auto id = next_id++;
+              send(get_block_request(id, added_block.verbosedata().hash()));
+              block_fetches.emplace(id, false);
+              std::cout << "AI_BLOCK_GETBLOCK_SENT id=" << id << " source=block_added\n" << std::flush;
             }
           }
           pump_backfill();
@@ -685,25 +725,22 @@ int run_client(const std::string &endpoint, const std::string &pay_address,
           }
           if (template_pending) obsolete_response = true;
           else if (!network.empty()) request_template();
-        } else if (payload(response, "getBlockResponse")) {
-          const auto id = unsigned_value(response, "id");
+        } else if (response.has_getblockresponse()) {
+          const auto id = response.id();
           const auto pending = block_fetches.find(id);
           if (pending != block_fetches.end()) {
             const bool from_backfill = pending->second;
             block_fetches.erase(pending);
-            const auto *block_payload = payload(response, "getBlockResponse");
-            const auto *block_field = block_payload ? field(*block_payload, "block") : nullptr;
-            if (block_payload && error_message(*block_payload).empty() && block_field &&
-                block_payload->GetReflection()->HasField(*block_payload, block_field)) {
-              const auto &wire_block = block_payload->GetReflection()->GetMessage(*block_payload, block_field);
-              if (const auto *typed = dynamic_cast<const protowire::RpcBlock *>(&wire_block)) {
-                observe_block(*typed, from_backfill);
-                if (from_backfill) (void)backfill.note_block(*typed);
-              }
-            } else if (block_payload && !error_message(*block_payload).empty()) {
+            const auto &block_payload = response.getblockresponse();
+            const bool has_err = block_payload.has_error() && !block_payload.error().message().empty();
+            if (!has_err && block_payload.has_block()) {
+              const auto &typed = block_payload.block();
+              observe_block(typed, from_backfill);
+              if (from_backfill) (void)backfill.note_block(typed);
+            } else if (has_err) {
               if (from_backfill) ++backfill_blocks_unavailable;
               std::cerr << "AI_BLOCK_FETCH_ERROR backfill=" << (from_backfill ? "true" : "false")
-                        << " detail=" << error_message(*block_payload) << "\n" << std::flush;
+                        << " detail=" << block_payload.error().message() << "\n" << std::flush;
             } else if (from_backfill) {
               ++backfill_blocks_unavailable;
               std::cerr << "AI_BLOCK_FETCH_ERROR backfill=true detail=block_payload_unavailable\n" << std::flush;

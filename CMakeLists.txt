@@ -155,11 +155,11 @@ if(NEXUS_ENABLE_CUDA)
   if(NOT NEXUS_ENABLE_GRPC)
     message(FATAL_ERROR "NEXUS_ENABLE_CUDA currently requires NEXUS_ENABLE_GRPC for captured-job binding")
   endif()
+  include("${CMAKE_CURRENT_SOURCE_DIR}/tools/cmake/cuda-architectures.cmake")
   enable_language(CUDA)
   find_package(CUDAToolkit 13 REQUIRED)
   set(CMAKE_CUDA_STANDARD 20)
   set(CMAKE_CUDA_STANDARD_REQUIRED ON)
-  set(CMAKE_CUDA_ARCHITECTURES 86)
 endif()
 
 add_library(nexus_consensus consensus/pom_v4.cpp consensus/pom_v5.cpp)
@@ -194,16 +194,16 @@ if(NEXUS_ENABLE_CUDA)
     else()
       set(kernel cuda_resident_kernels.cu)
     endif()
-    set(cubin "${CMAKE_CURRENT_BINARY_DIR}/nexus_${image}.cubin")
+    set(cubin "${CMAKE_CURRENT_BINARY_DIR}/nexus_${image}.fatbin")
     set(embedded "${CMAKE_CURRENT_BINARY_DIR}/nexus_${image}_image.cpp")
     add_custom_command(OUTPUT "${embedded}"
       COMMAND ${CMAKE_COMMAND} -E env
         "TMPDIR=${NEXUS_CUDA_TEMP}" "TMP=${NEXUS_CUDA_TEMP}" "TEMP=${NEXUS_CUDA_TEMP}"
-        ${CMAKE_CUDA_COMPILER} --cubin --cudart=none -arch=sm_86
+        ${CMAKE_CUDA_COMPILER} --fatbin --cudart=none ${NEXUS_CUDA_IMAGE_FLAGS}
         "${CMAKE_CURRENT_SOURCE_DIR}/consensus/${kernel}" -o "${cubin}"
       COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/embed_cubin.py"
         "${cubin}" "${embedded}" "_binary_nexus_${image}_cubin_start"
-      DEPENDS "consensus/${kernel}" consensus/resident_keccak.cuh tools/embed_cubin.py
+      DEPENDS "consensus/${kernel}" consensus/resident_keccak.cuh consensus/resident_path_pipeline.cuh tools/embed_cubin.py tools/cmake/cuda-architectures.cmake
       VERBATIM)
     list(APPEND NEXUS_CUDA_IMAGES "${embedded}")
   endforeach()
@@ -399,8 +399,8 @@ int main() {
     target_include_directories(nexus-opoi-reference-runner PRIVATE include)
     target_link_libraries(nexus-opoi-reference-runner PRIVATE nexus_grpc CUDA::cudart OpenSSL::Crypto ${CMAKE_DL_LIBS})
     add_executable(nexus-full-vram-probe src/model/full_vram_probe.cu)
+    target_include_directories(nexus-full-vram-probe PRIVATE include)
     target_link_libraries(nexus-full-vram-probe PRIVATE CUDA::cudart OpenSSL::Crypto)
-    set_target_properties(nexus-full-vram-probe PROPERTIES CUDA_ARCHITECTURES 86)
   endif()
   if(NEXUS_LIVE_CAPTURE_DIR AND EXISTS "${NEXUS_LIVE_CAPTURE_DIR}/live-mainnet.capture")
     add_test(NAME live_template_header_consensus COMMAND nexus-live-header-capture-check

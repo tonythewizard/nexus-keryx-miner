@@ -101,8 +101,18 @@ struct H15AuditClient::Impl {
     std::uint64_t daa;
     protowire::GetVirtualChainFromBlockResponseMessage page;
     int at{};
+    int accepted_cursor{};
   };
   std::optional<ChainPage> pending_page;
+  std::optional<std::uint64_t> cached_tile_index;
+  std::array<std::uint8_t, 1024> cached_tile_bytes{};
+  bool cached_tile_tree_ready{};
+  std::array<Hash, 32> cached_tile_l0{};
+  std::array<Hash, 16> cached_tile_l1{};
+  std::array<Hash, 8> cached_tile_l2{};
+  std::array<Hash, 4> cached_tile_l3{};
+  std::array<Hash, 2> cached_tile_l4{};
+  std::vector<Hash> cached_tile_upper_path;
   std::optional<std::chrono::steady_clock::time_point> rpc_budget;
   std::function<void(const std::function<void()> &)> with_gpu;
   Impl(opoi::StockLlamaRuntime &r, const model::ReadOnlyGguf &g,
@@ -228,7 +238,7 @@ struct H15AuditClient::Impl {
          "Audit ledger response failed");
     std::vector<std::uint8_t> frame;
     put(frame, response.virtualdaascore(), 8);
-    put(frame, response.openings_size(), 4);
+    put(frame, static_cast<std::uint64_t>(response.openings_size()), 4);
     for (const auto &o : response.openings()) {
       need(queried.contains(o.responsetxid()) && o.attentionpath_size() <= 16,
            "Unsolicited audit ledger row");
@@ -237,7 +247,7 @@ struct H15AuditClient::Impl {
       hash(frame, unhex(o.seed()));
       put(frame, o.deadlinedaa(), 8);
       put(frame, o.pieces(), 4);
-      put(frame, o.attentionpath_size(), 4);
+      put(frame, static_cast<std::uint64_t>(o.attentionpath_size()), 4);
       for (auto child : o.attentionpath())
         put(frame, child, 8);
       put(frame, o.accepteddaa(), 8);
@@ -288,32 +298,52 @@ struct H15AuditClient::Impl {
     try {
       auto &p = *static_cast<Impl *>(u);
       need(index < p.gguf.chunk_count() && out && n, "Audit weight bounds");
-      const auto tile = p.gguf.read_tile(index / 32);
-      std::memcpy(out, tile.data() + index % 32 * 32, 32);
+      const auto tile_index = index / 32;
+      const auto chunk_in_tile = static_cast<std::size_t>(index % 32);
+      if (p.cached_tile_index != tile_index) {
+        // Publish bytes and identity together; a failed read must not poison the old tile.
+        std::array<std::uint8_t, 1024> tile_bytes;
+        p.gguf.read_tile_into(tile_index, tile_bytes);
+        p.cached_tile_bytes = tile_bytes;
+        p.cached_tile_index = tile_index;
+        p.cached_tile_tree_ready = false;
+      }
+      std::memcpy(out, p.cached_tile_bytes.data() + chunk_in_tile * 32, 32);
       if (!path) {
         *n = 0;
         return 0;
       }
-      std::vector<Hash> nodes;
-      nodes.reserve(32);
-      for (std::size_t i = 0; i < 32; ++i)
-        nodes.push_back(
-            consensus::blake3_hash(std::span(tile.data() + i * 32, 32)));
-      std::vector<Hash> proof;
-      auto at = index % 32;
-      for (unsigned level = 0; level < 5; ++level) {
-        proof.push_back(nodes[at ^ 1]);
-        std::vector<Hash> next;
-        for (std::size_t i = 0; i < nodes.size(); i += 2)
-          next.push_back(consensus::hash_pair(nodes[i], nodes[i + 1]));
-        nodes = std::move(next);
-        at /= 2;
+      if (!p.cached_tile_tree_ready) {
+        for (std::size_t i = 0; i < 32; ++i)
+          p.cached_tile_l0[i] = consensus::blake3_hash(
+              std::span(p.cached_tile_bytes.data() + i * 32, 32));
+        for (std::size_t i = 0; i < 16; ++i)
+          p.cached_tile_l1[i] = consensus::hash_pair(
+              p.cached_tile_l0[2 * i], p.cached_tile_l0[2 * i + 1]);
+        for (std::size_t i = 0; i < 8; ++i)
+          p.cached_tile_l2[i] = consensus::hash_pair(
+              p.cached_tile_l1[2 * i], p.cached_tile_l1[2 * i + 1]);
+        for (std::size_t i = 0; i < 4; ++i)
+          p.cached_tile_l3[i] = consensus::hash_pair(
+              p.cached_tile_l2[2 * i], p.cached_tile_l2[2 * i + 1]);
+        for (std::size_t i = 0; i < 2; ++i)
+          p.cached_tile_l4[i] = consensus::hash_pair(
+              p.cached_tile_l3[2 * i], p.cached_tile_l3[2 * i + 1]);
+        p.cached_tile_upper_path = p.merkle.tile_path(tile_index);
+        p.cached_tile_tree_ready = true;
       }
-      auto upper = p.merkle.tile_path(index / 32);
-      proof.insert(proof.end(), upper.begin(), upper.end());
-      need(proof.size() <= *n, "Audit path capacity");
-      std::memcpy(path, proof.data(), proof.size() * 32);
-      *n = proof.size();
+      const std::size_t total_depth = 5 + p.cached_tile_upper_path.size();
+      need(total_depth <= *n, "Audit path capacity");
+      auto *dst = reinterpret_cast<Hash *>(path);
+      dst[0] = p.cached_tile_l0[chunk_in_tile ^ 1U];
+      dst[1] = p.cached_tile_l1[(chunk_in_tile >> 1U) ^ 1U];
+      dst[2] = p.cached_tile_l2[(chunk_in_tile >> 2U) ^ 1U];
+      dst[3] = p.cached_tile_l3[(chunk_in_tile >> 3U) ^ 1U];
+      dst[4] = p.cached_tile_l4[(chunk_in_tile >> 4U) ^ 1U];
+      if (!p.cached_tile_upper_path.empty())
+        std::memcpy(dst + 5, p.cached_tile_upper_path.data(),
+                    p.cached_tile_upper_path.size() * sizeof(Hash));
+      *n = total_depth;
       return 0;
     } catch (...) {
       return -1;
@@ -575,11 +605,20 @@ void H15AuditClient::poll() {
       hash(b, raw_hash);
       put(b, block.header().daascore(), 8);
       const protowire::RpcAcceptedTransactionIds *accepted = nullptr;
-      for (const auto &ids : page.acceptedtransactionids())
-        if (ids.acceptingblockhash() == h) {
-          accepted = &ids;
-          break;
+      const int accepted_total = page.acceptedtransactionids_size();
+      if (work.accepted_cursor < accepted_total &&
+          page.acceptedtransactionids(work.accepted_cursor).acceptingblockhash() == h) {
+        accepted = &page.acceptedtransactionids(work.accepted_cursor++);
+      } else {
+        for (int idx = 0; idx < accepted_total; ++idx) {
+          const auto &ids = page.acceptedtransactionids(idx);
+          if (ids.acceptingblockhash() == h) {
+            accepted = &ids;
+            work.accepted_cursor = idx + 1;
+            break;
+          }
         }
+      }
       need(!accepted || accepted->acceptedtransactionids_size() <= 50000,
            "H15 accepted transaction bounds");
       put(b,

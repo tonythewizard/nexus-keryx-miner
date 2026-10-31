@@ -26,6 +26,11 @@ public:
     return envelope_.getblocktemplateresponse().block();
   }
   std::uint64_t revision() const noexcept { return revision_; }
+  const protowire::RpcBlock &cached_block() const {
+    if (wire_.empty())
+      throw std::logic_error("no cached RPC template block");
+    return envelope_.getblocktemplateresponse().block();
+  }
 
 private:
   protowire::KaspadResponse envelope_;

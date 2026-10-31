@@ -32,6 +32,9 @@ public:
         default:continue; // transport and separate health RPCs work; mining stream goes silent
       }
       if(!stream->Write(response))break;
+      // The second main connection requests shutdown. Close the fixture stream
+      // so the client cannot remain blocked in Read after its watchdog stops.
+      if(stop_.load(std::memory_order_acquire))break;
     }
     return grpc::Status::OK;
   }

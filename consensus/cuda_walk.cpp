@@ -197,7 +197,7 @@ struct CudaWalkEngine::Impl {
     CUdevice selected{};
     check(cuDeviceGet(&selected, found->ordinal), "cuDeviceGet selected GPU");
     context.retain(selected);
-    check(cuModuleLoadData(&module, _binary_nexus_pom_cubin_start), "cuModuleLoadData embedded SM 8.6 PoM module");
+    check(cuModuleLoadData(&module, _binary_nexus_pom_cubin_start), "cuModuleLoadData embedded multi-architecture PoM module");
     check(cuModuleGetFunction(&pom_kernel, module, "pom_v4_walk_kernel"), "cuModuleGetFunction PoM kernel");
     check(cuModuleGetFunction(&scatter_kernel, module, "cache_scatter_kernel"), "cuModuleGetFunction cache scatter kernel");
     stream.create();

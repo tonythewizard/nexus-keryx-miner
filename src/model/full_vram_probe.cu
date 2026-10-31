@@ -1,5 +1,6 @@
 #include "keryx/nexus/developer_config.hpp"
 #include <cuda_runtime.h>
+#include "keryx/nexus/gpu_device_policy.hpp"
 #include <openssl/evp.h>
 
 #include <algorithm>
@@ -183,9 +184,9 @@ int run(const char *model_path) {
   if (device_count != 1) throw std::runtime_error("CUDA runtime must expose exactly one device");
   cudaDeviceProp prop{};
   check(cudaGetDeviceProperties(&prop, 0), "cudaGetDeviceProperties authorized device");
-  if (uuid_string(prop.uuid) != authorized_uuid ||
-      prop.major != 8 || prop.minor != 6)
-    throw std::runtime_error("CUDA visible device is not the authorized primary NVIDIA GPU SM 8.6");
+  if (uuid_string(prop.uuid) != authorized_uuid)
+    throw std::runtime_error("CUDA visible device UUID mismatch");
+  keryx::nexus::require_cuda_model(prop.name, prop.major, prop.minor, std::getenv("NEXUS_PRIMARY_GPU_NAME"));
   check(cudaSetDevice(0), "cudaSetDevice authorized RTX");
 
   const int fd = ::open(model_path, O_RDONLY | O_CLOEXEC | O_NOATIME);
@@ -310,7 +311,7 @@ int run(const char *model_path) {
   float upload_ms = 0;
   check(cudaEventElapsedTime(&upload_ms, begin, end), "measure upload CUDA event time");
   std::cout << "FULL_VRAM_PROBE=PASS uuid=" << authorized_uuid
-            << " sm=8.6 model_file_bytes=" << expected_file_size
+            << " sm=" << prop.major << "." << prop.minor << " model_file_bytes=" << expected_file_size
             << " model_sha256=" << actual_sha << " allocation_bytes=" << expected_file_size
             << " uploaded_bytes=" << expected_file_size << " staging_bytes=" << staging_bytes
             << " sample_count=" << sample_count << " repeated_gpu_read_rounds=3"

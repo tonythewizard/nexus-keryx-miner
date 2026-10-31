@@ -32,11 +32,23 @@ class Release(unittest.TestCase):
                      'cuda/bin/cublas64_13.dll', 'cuda/bin/cublasLt64_13.dll',
                      'worker/private-wallet.key', 'engine/DO-NOT-PACK.key'):
             (self.root / name).write_text('synthetic packaging fixture')
-        (self.root / 'engine/NEXUS_RUNTIME.json').write_text(json.dumps({'application_abi': 8, 'candidate_only': False}))
+        (self.root / 'engine/NEXUS_RUNTIME.json').write_text(json.dumps({'application_abi': 8, 'candidate_only': False, 'cuda_architectures': ['sm_86', 'sm_89', 'sm_120']}))
         return [sys.executable, str(ROOT / 'tools/package_release.py'), '--platform', 'windows',
                 '--worker-dir', str(self.root / 'worker'), '--oracle', str(self.root / 'oracle.exe'),
                 '--runtime-dir', str(self.root / 'engine'), '--cuda-dir', str(self.root / 'cuda/bin'),
                 '--output', str(self.root / 'out')]
+
+    def test_old_or_partial_architecture_runtime_is_refused(self):
+        args = self.package_inputs()
+        for architectures in (None, ['sm_86'], ['sm_86', 'sm_89']):
+            info = {'application_abi': 8, 'candidate_only': False}
+            if architectures is not None:
+                info['cuda_architectures'] = architectures
+            (self.root / 'engine/NEXUS_RUNTIME.json').write_text(json.dumps(info))
+            result = subprocess.run(args, capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('matching RTX 30/40/50', result.stderr)
+            self.assertFalse(list((self.root / 'out').glob('*')))
 
     def test_missing_runtime_sidecar_is_refused_before_packaging(self):
         args = self.package_inputs()
@@ -56,7 +68,7 @@ class Release(unittest.TestCase):
 
     def test_abi8_runtime_sidecar_is_retained_and_identified(self):
         args = self.package_inputs()
-        info = {'application_abi': 8, 'candidate_only': False}
+        info = {'application_abi': 8, 'candidate_only': False, 'cuda_architectures': ['sm_86', 'sm_89', 'sm_120']}
         (self.root / 'engine/NEXUS_RUNTIME.json').write_text(json.dumps(info))
         subprocess.run(args, check=True, capture_output=True)
         with zipfile.ZipFile(next((self.root / 'out').glob('*.zip'))) as packed:
@@ -67,6 +79,7 @@ class Release(unittest.TestCase):
     def test_explicit_abi9_preserves_experimental_metadata(self):
         args = self.package_inputs() + ['--runtime-abi', '9']
         info = {'application_abi': 9, 'candidate_only': True,
+                'cuda_architectures': ['sm_86', 'sm_89', 'sm_120'],
                 'patch_set_sha256': 'a' * 64, 'wrapper_sha256': 'b' * 64}
         (self.root / 'engine/NEXUS_RUNTIME.json').write_text(json.dumps(info))
         subprocess.run(args, check=True, capture_output=True)
@@ -92,6 +105,7 @@ class Release(unittest.TestCase):
             self.assertNotIn('private-wallet.key', entries)
             self.assertNotIn('DO-NOT-PACK.key', entries)
             manifest = json.loads(entries['BUILD.json'])
+            self.assertEqual(manifest['cuda_architectures'], ['sm_86', 'sm_89', 'sm_120'])
             self.assertFalse(manifest['gpu_execution_validated'])
             self.assertFalse(manifest['h15_complete'])
             self.assertEqual(len(manifest['commit']), 40)
