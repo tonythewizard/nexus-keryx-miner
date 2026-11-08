@@ -287,7 +287,7 @@ def find_worker_pids() -> list[int]:
                 if entry.stat().st_uid != os.getuid():
                     continue
                 exe = Path(os.readlink(entry / 'exe')).name.removesuffix(' (deleted)')
-                if exe in ('nexus-live-cuda-worker', 'nexus-m21-oracle', 'keryx-miner-rdna3', 'nexus-vulkan-rdna3-worker'):
+                if exe in ('nexus-live-cuda-worker', 'nexus-m21-oracle', 'nexus-live-vulkan-worker'):
                     pids.append(int(entry.name))
             except (OSError, ValueError):
                 continue
@@ -307,6 +307,27 @@ def is_miner_paused() -> bool:
         except OSError:
             pass
         return False
+    try:
+        data = _read_private(pause_file)
+        stored_pids = set(data.get("pids", []))
+        if stored_pids and not (stored_pids & set(workers)):
+            pause_file.unlink(missing_ok=True)
+            return False
+        stopped = False
+        for pid in (stored_pids & set(workers)) if stored_pids else set(workers):
+            try:
+                with open(f"/proc/{pid}/stat", "r") as f:
+                    stat_parts = f.read().split(")")
+                    if len(stat_parts) >= 2 and stat_parts[1].split()[0] == "T":
+                        stopped = True
+                        break
+            except (OSError, IndexError):
+                continue
+        if not stopped and (time.time() - data.get("timestamp", 0) > 5.0):
+            pause_file.unlink(missing_ok=True)
+            return False
+    except Exception:
+        pass
     return True
 
 
@@ -677,7 +698,7 @@ def restart_miner(force: bool = True) -> dict:
 
     # Step 2: Ensure any lingering worker processes are fully terminated
     stop_deadline = time.monotonic() + 4.0
-    known_workers = {'nexus-live-cuda-worker', 'keryx-miner-rdna3', 'nexus-vulkan-rdna3-worker'}
+    known_workers = {'nexus-live-cuda-worker', 'nexus-live-vulkan-worker'}
     while time.monotonic() < stop_deadline:
         workers_found = False
         try:
@@ -699,8 +720,7 @@ def restart_miner(force: bool = True) -> dict:
             break
         if force and time.monotonic() > stop_deadline - 2.5:
             subprocess.run(["/usr/bin/pkill", "-9", "-u", str(os.getuid()), "-f", "nexus-live-cuda-worker"], capture_output=True)
-            subprocess.run(["/usr/bin/pkill", "-9", "-u", str(os.getuid()), "-f", "keryx-miner-rdna3"], capture_output=True)
-            subprocess.run(["/usr/bin/pkill", "-9", "-u", str(os.getuid()), "-f", "nexus-vulkan-rdna3-worker"], capture_output=True)
+            subprocess.run(["/usr/bin/pkill", "-9", "-u", str(os.getuid()), "-f", "nexus-live-vulkan-worker"], capture_output=True)
         time.sleep(0.2)
 
     # Step 3: Clear any orphan GPU lease locks
