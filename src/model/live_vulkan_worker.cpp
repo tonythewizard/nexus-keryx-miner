@@ -592,7 +592,12 @@ int main(int argc, char **argv) {
   std::unique_ptr<ai::AiResponseService> ai_response_service;
   std::unique_ptr<ai::EscrowWatcher> escrow_watcher;
   std::unique_ptr<ai::StrikeMonitor> strike_monitor;
-  ai::AiResponseTransport ai_response_transport(endpoint);
+  std::unique_ptr<ai::AiResponseTransport> ai_response_transport;
+  if (!pool_mode) {
+    try {
+      ai_response_transport = std::make_unique<ai::AiResponseTransport>(endpoint);
+    } catch (...) {}
+  }
   std::future<void> escrow_claim_task;
   std::atomic_uint64_t next_claim_check_ns{0};
   std::uint64_t last_claim_check_unix{0};
@@ -936,9 +941,11 @@ int main(int argc, char **argv) {
             return false;
           }
         });
-    (void)ai_response_service->reconcile_ambiguous([&](std::string_view txid) {
-      return ai_response_transport.known(txid);
-    });
+    if (ai_response_transport) {
+      (void)ai_response_service->reconcile_ambiguous([&](std::string_view txid) {
+        return ai_response_transport->known(txid);
+      });
+    }
   };
 
   while (!process_stop.load(std::memory_order_relaxed)) {
@@ -1004,18 +1011,18 @@ int main(int argc, char **argv) {
           };
           effects.submit = [&](const protowire::RpcTransaction &tx, std::string_view txid) {
             telemetry.set_state("PAUSED", "RESPONSE_READY", "AI_RESPONSE_SUBMISSION", "AI_RESPONSE_SUBMIT_SENT");
-            if (!ai_responses_enabled)
+            if (!ai_responses_enabled || !ai_response_transport)
               return ai::AiResponseEffects::SubmitResult{ai::AiResponseEffects::SubmitResult::State::Rejected,
-                                                        "AiResponse transaction authorization is disabled"};
+                                                        "AiResponse transaction authorization is disabled or unavailable in pool mode"};
             if (h15_audits && native_trace_persisted) h15_audits->response_intent(txid);
             const auto rpc_started = std::chrono::steady_clock::now();
-            const auto result = ai_response_transport.submit(tx, txid);
+            const auto result = ai_response_transport->submit(tx, txid);
             const auto rpc_ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - rpc_started).count();
             if (h15_audits && native_trace_persisted) h15_audits->response_result(txid, result.state, rpc_ms);
             return result;
           };
-          effects.reconcile = [&](std::string_view txid) {
-            return ai_response_transport.known(txid);
+          effects.reconcile = [&](std::string_view txid) -> bool {
+            return ai_response_transport ? ai_response_transport->known(txid) : false;
           };
           effects.current_daa = [&] { return ai_current_daa.load(std::memory_order_acquire); };
           effects.wait_before_retry = [&](std::uint32_t milliseconds) {
