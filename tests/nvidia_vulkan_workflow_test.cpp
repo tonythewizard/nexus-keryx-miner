@@ -127,7 +127,7 @@ int main(int argc,char **argv){try{
     auto parsed=parse_request(request->tx,daa,nullptr,"mainnet");require(bool(parsed),"AI fixture parse failed");
     std::vector<std::uint8_t> opened;
     require(stock_verify_response(unhex(mock.last().payload()),parsed->request_hash,request->escrow,
-      sealed?std::optional(request->root):std::nullopt,sealed?&opened:nullptr),"Official Rust response signature/sealing verification failed");
+      sealed?std::optional(request->requester_secret):std::nullopt,sealed?&opened:nullptr),"Official Rust response signature/sealing verification failed");
     if(sealed)require(std::string(opened.begin(),opened.end())==generated_answer,
       "Private response did not open to the real Vulkan inference output");
     protowire::RpcBlock observed;observed.mutable_header()->set_daascore(daa+1);observed.add_transactions()->CopyFrom(mock.last());

@@ -380,7 +380,7 @@ ResidentSearchResult CudaResidentSearch::run_impl(const Hash &pph,std::uint64_t 
     launch_params[28]=&p.path_metadata.ptr;
     launch_params[29]=&p.path_addresses.ptr;
   }
-  check(cuLaunchKernel(p.v5?p.v5_kernel:p.path_kernel,static_cast<unsigned>((count+3)/4),1,1,128,1,1,p.v5?8192:8320,p.resources.stream,launch_params.data(),nullptr),"launch resident PoM");
+  check(cuLaunchKernel(p.v5?p.v5_kernel:p.path_kernel,static_cast<unsigned>((count+3)/4),1,1,128,1,1,p.v5?12416:8320,p.resources.stream,launch_params.data(),nullptr),"launch resident PoM");
   *pinned_winner=none;
   check(cuMemcpyDtoHAsync(pinned_winner,p.winner.ptr,8,p.resources.stream),"read winning nonce");
   check(cuEventRecord(p.resources.end,p.resources.stream),"record resident completion");if(after_enqueue){const auto status=cuEventQuery(p.resources.end);if(status!=CUDA_SUCCESS&&status!=CUDA_ERROR_NOT_READY)check(status,"resident completion query");after_enqueue(status==CUDA_ERROR_NOT_READY);}

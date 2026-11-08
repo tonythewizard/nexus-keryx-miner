@@ -393,70 +393,6 @@ extern "C" __global__ void nexus_v5_pad_fill(unsigned long long* pad,
   pad[index*4]=a;pad[index*4+1]=b;pad[index*4+2]=c;pad[index*4+3]=d;
 }
 
-__device__ __forceinline__ unsigned int v5ls_sw(unsigned int r, unsigned int w) {
-    return r * 8u + (w ^ (((r >> 2) & 1u) * 4u));
-}
-
-__device__ __forceinline__ void v5_load_tile_swizzled(
-    unsigned int* tile_dst, const ulonglong2* q, unsigned int x) {
-    const unsigned int col = x;
-    const unsigned int h_sw = ((col >> 2) & 1u) * 4u;
-    const unsigned int word0 = col * 8u + (0u ^ h_sw);
-    const unsigned int word1 = col * 8u + (4u ^ h_sw);
-    v4_cp_async16(tile_dst + word0, q);
-    v4_cp_async16(tile_dst + word1, q + 1);
-}
-
-__device__ __forceinline__ void v5ls_step_one(
-    unsigned int* s_state, const unsigned int* s_tile, unsigned int step, unsigned int x,
-    const ulonglong2* next_q, bool has_next) {
-    const unsigned int gid = x >> 2, tig = x & 3u;
-    unsigned int a[2][4];
-    #pragma unroll
-    for (unsigned int g = 0; g < 2; g++) {
-        const unsigned int r0 = g * 16u + gid, r1 = r0 + 8u;
-        a[g][0] = s_state[v5ls_sw(r0, tig)];      a[g][1] = s_state[v5ls_sw(r1, tig)];
-        a[g][2] = s_state[v5ls_sw(r0, tig + 4u)]; a[g][3] = s_state[v5ls_sw(r1, tig + 4u)];
-    }
-    unsigned int bs[4][2];
-    #pragma unroll
-    for (unsigned int cg = 0; cg < 4; cg++) {
-        const unsigned int col = cg * 8u + gid;
-        bs[cg][0] = s_tile[v5ls_sw(col, tig)];
-        bs[cg][1] = s_tile[v5ls_sw(col, tig + 4u)];
-    }
-    __syncwarp();
-    asm volatile("" ::: "memory");
-    if (has_next) {
-        v5_load_tile_swizzled(const_cast<unsigned int*>(s_tile), next_q, x);
-    }
-    unsigned short* s16 = (unsigned short*)s_state;
-    const unsigned int step_base = step * 0x9E3779B9u;
-    #pragma unroll
-    for (unsigned int cg = 0; cg < 4; cg++) {
-        const unsigned int b0 = bs[cg][0];
-        const unsigned int b1 = bs[cg][1];
-        #pragma unroll
-        for (unsigned int g = 0; g < 2; g++) {
-            int c0 = 0, c1 = 0, c2 = 0, c3 = 0;
-            asm volatile(
-                "mma.sync.aligned.m16n8k32.row.col.s32.s8.s8.s32 "
-                "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9}, {%0,%1,%2,%3};"
-                : "+r"(c0), "+r"(c1), "+r"(c2), "+r"(c3)
-                : "r"(a[g][0]), "r"(a[g][1]), "r"(a[g][2]), "r"(a[g][3]), "r"(b0), "r"(b1));
-            const unsigned int r0 = g * 16u + gid, r1 = r0 + 8u;
-            const unsigned int j0 = cg * 8u + tig * 2u;
-            const unsigned int tw0 = step_base + r0 * 0xC2B2AE35u + j0 * 0x85EBCA6Bu;
-            const unsigned int tw1 = step_base + r1 * 0xC2B2AE35u + j0 * 0x85EBCA6Bu;
-            s16[2u * v5ls_sw(r0, j0 >> 2) + (tig & 1u)] =
-                (unsigned short)(v3_rho8(c0, tw0) | (v3_rho8(c1, tw0 + 0x85EBCA6Bu) << 8));
-            s16[2u * v5ls_sw(r1, j0 >> 2) + (tig & 1u)] =
-                (unsigned short)(v3_rho8(c2, tw1) | (v3_rho8(c3, tw1 + 0x85EBCA6Bu) << 8));
-        }
-    }
-    __syncwarp();
-}
-
 extern "C" __global__ void nexus_resident_search_v5(
     const unsigned long long* bases, const unsigned long long* prefix, unsigned int T,
     unsigned long long n_tiles, unsigned int K,
@@ -479,101 +415,84 @@ extern "C" __global__ void nexus_resident_search_v5(
     const unsigned int x = threadIdx.x & 31u;
     const unsigned long long i = (unsigned long long)blockIdx.x * V4_NCF_WARPS + w;
     if (i >= n_nonces) return;
-
-    // In-place 2 KiB (512 words) shared memory layout per warp:
-    // [0..255]: s_state (1 KiB swizzled)
-    // [256..511]: s_tile (1 KiB in-place staging / Blake3 tree buffer)
-    unsigned int* s_warp = s_shared + w * 512u;
+    // Per warp: 1 KiB state + two (1 KiB tile + 16-byte fold pair) buffers.
+    unsigned int* s_warp = s_shared + w * (256u + 2u * 260u);
     unsigned int* s_state = s_warp;
-    unsigned int* s_tile = s_warp + 256u;
+    unsigned int* s_tiles = s_warp + 256u;
 
     const unsigned long long nonce = nonce_base + i;
+    // Every lane needs the identical seed; H10 seeds are precomputed by nexus_h10_seeds.
     unsigned long long seed = (x == 0u)
         ? (seed_precomputed ? __ldg(&h10_seeds[i]) : pom_seed_fold(nonce, time_, s0, s1, s2, s3))
         : 0ULL;
     seed = __shfl_sync(0xFFFFFFFFu, seed, 0);
-
-    // Initial state S_0
-    {
-        unsigned long long h = mix64(seed ^ (V4_S0_ROW_SALT + (unsigned long long)x));
-        #pragma unroll
-        for (int k4 = 0; k4 < V4_D4; k4++) {
-            h = mix64(h);
-            s_state[v5ls_sw(x, k4)] = (unsigned int)h;
-        }
-    }
+    { unsigned long long h = mix64(seed ^ (V4_S0_ROW_SALT + (unsigned long long)x));
+      #pragma unroll
+      for (int k4 = 0; k4 < V4_D4; k4++) { h = mix64(h); s_state[x * 8u + k4] = (unsigned int)h; } }
     __syncwarp();
 
-    if (diagnostic_states) {
-        for (unsigned k = 0; k < 8; ++k)
-            diagnostic_states[(i * 257ULL) * 256ULL + x * 8u + k] = s_state[v5ls_sw(x, k)];
+    if(diagnostic_states) {
+      for(unsigned k=0;k<8;++k)diagnostic_states[(i*257ULL)*256ULL+x*8u+k]=s_state[x*8u+k];
     }
-
     unsigned long long off = v4_barrett_mod(mix64(seed ^ V4_OFFSET_FIRST_SALT), n_tiles, inv_n);
     {
         const ulonglong2* q = v4_chunk_addr_warp(bases, prefix, T, lut, lut_sh, off, x);
-        v5_load_tile_swizzled(s_tile, q, x);
+        ulonglong2* dst = (ulonglong2*)(s_tiles + 260u + x * 8);   // tile 1 -> buffer (1&1)=1
+        v4_cp_async16(dst, q); v4_cp_async16(dst + 1, q + 1);
+        if(x==0u && off<n_tiles)v4_cp_async16(s_tiles+260u+256u,tile_folds+(off&~1ULL));
         asm volatile("cp.async.commit_group;");
     }
-
     for (unsigned int step = 1; step <= K; step++) {
+        unsigned int* cur = s_tiles + (step & 1u) * 260u;
         asm volatile("cp.async.wait_group 0;");
         __syncwarp();
-
-        if (diagnostic_offsets && x == 0u) diagnostic_offsets[i * 256ULL + step - 1u] = off;
-
-        const ulonglong2* next_q = nullptr;
+        if(diagnostic_offsets && x==0u)diagnostic_offsets[i*256ULL+step-1u]=off;
         if (step < K) {
-            // S_{step-1} fast state fold with native SM80+ warp reduction
-            unsigned long long hs = mix64(
-                (static_cast<unsigned long long>(s_state[v5ls_sw(x, 1u)]) << 32 | s_state[v5ls_sw(x, 0u)]) ^ x);
-            const unsigned int hs_lo = __reduce_xor_sync(0xffffffffu, static_cast<unsigned int>(hs));
-            const unsigned int hs_hi = __reduce_xor_sync(0xffffffffu, static_cast<unsigned int>(hs >> 32));
-            hs = (static_cast<unsigned long long>(hs_hi) << 32) | hs_lo;
-
-            unsigned long long next_off = 0;
-            if (x == 0u) {
-                unsigned long long sf = 0;
-                if (off < n_tiles) sf = __ldg(&tile_folds[off]);
-                else for (unsigned wd = 0; wd < 8; ++wd) sf = mix64(sf ^ static_cast<unsigned long long>(s_tile[wd]));
-                const auto raw = mix64(seed ^ static_cast<unsigned long long>(step + 1u) * V4_OFFSET_STEP_SALT ^ sf ^ hs);
-                const bool is_pad = ((step + 1u) * pad_steps) / 256u != (step * pad_steps) / 256u;
-                next_off = is_pad ? n_tiles + v4_barrett_mod(raw, n_pad, inv_pad) : v4_barrett_mod(raw, n_tiles, inv_n);
+            // v5 depends on the pre-transition state. Every lane contributes its
+            // row's first eight bytes before any lane overwrites that state.
+            unsigned long long hs=mix64((static_cast<unsigned long long>(s_state[x*8u+1u])<<32 | s_state[x*8u]) ^ x);
+            // SM80+ native warp reductions replace ten 32-bit shuffle/XOR pairs.
+            const unsigned int hs_lo=__reduce_xor_sync(0xffffffffu,static_cast<unsigned int>(hs));
+            const unsigned int hs_hi=__reduce_xor_sync(0xffffffffu,static_cast<unsigned int>(hs>>32));
+            hs=(static_cast<unsigned long long>(hs_hi)<<32)|hs_lo;
+            unsigned long long next_off=0;
+            if(x==0u) {
+                unsigned long long sf=0;
+                if(off<n_tiles)sf=reinterpret_cast<const unsigned long long*>(cur+256u)[off&1u];
+                else for(unsigned wd=0;wd<8;++wd)sf=mix64(sf^static_cast<unsigned long long>(cur[wd]));
+                const auto raw=mix64(seed^static_cast<unsigned long long>(step+1u)*V4_OFFSET_STEP_SALT^sf^hs);
+                const bool is_pad=((step+1u)*pad_steps)/256u!=(step*pad_steps)/256u;
+                next_off=is_pad?n_tiles+v4_barrett_mod(raw,n_pad,inv_pad):v4_barrett_mod(raw,n_tiles,inv_n);
             }
             off = __shfl_sync(0xFFFFFFFFu, next_off, 0);
-            next_q = v4_chunk_addr_warp(bases, prefix, T, lut, lut_sh, off, x);
+            const ulonglong2* q = v4_chunk_addr_warp(bases, prefix, T, lut, lut_sh, off, x);
+            ulonglong2* dst = (ulonglong2*)(s_tiles + ((step + 1u) & 1u) * 260u + x * 8);
+            v4_cp_async16(dst, q); v4_cp_async16(dst + 1, q + 1);
+            if(x==0u && off<n_tiles)v4_cp_async16(s_tiles+((step+1u)&1u)*260u+256u,tile_folds+(off&~1ULL));
         }
-
-        v5ls_step_one(s_state, s_tile, step, x, next_q, step < K);
         asm volatile("cp.async.commit_group;");
-
-        if (diagnostic_states) {
-            for (unsigned k = 0; k < 8; ++k)
-                diagnostic_states[(i * 257ULL + step) * 256ULL + x * 8u + k] = s_state[v5ls_sw(x, k)];
+        v4_imma_step(s_state, cur, step, x);
+        if(diagnostic_states) {
+          for(unsigned k=0;k<8;++k)diagnostic_states[(i*257ULL+step)*256ULL+x*8u+k]=s_state[x*8u+k];
         }
     }
     asm volatile("cp.async.wait_group 0;");
     __syncwarp();
 
-    // root_K + fold: Blake3 row leaves + Merkle root reduction ping-ponging inside 512-word space
+    // root_K + fold, verbatim reference tail.
     unsigned int row4[V4_D4];
     #pragma unroll
-    for (int k4 = 0; k4 < V4_D4; k4++) row4[k4] = s_state[v5ls_sw(x, k4)];
-    b3_hash_row32(row4, s_tile + x * 8u);
+    for (int k4 = 0; k4 < V4_D4; k4++) row4[k4] = s_state[x * 8u + k4];
+    unsigned int* s_tile = s_tiles;
+    b3_hash_row32(row4, s_tile + x * 8);
     __syncwarp();
-
-    unsigned int src_off = 256u, dst_off = 0u;
-    for (unsigned int n = 32u; n > 1; n >>= 1) {
-        const unsigned int parents = n / 2;
-        if (x < parents) {
-            b3_hash_pair(s_warp + src_off + x * 16u, s_warp + dst_off + x * 8u);
-        }
+    unsigned int* src = s_tile; unsigned int* dst = s_tile + V4_D * 8;
+    for (unsigned int n = V4_D; n > 1; n >>= 1) {
+        if (x < n / 2) b3_hash_pair(src + x * 16, dst + x * 8);
         __syncwarp();
-        unsigned int temp = src_off; src_off = dst_off; dst_off = temp;
+        unsigned int* tmp = src; src = dst; dst = tmp;
     }
-
     if (x == 0) {
-        unsigned int* src = s_warp + src_off;
         const unsigned long long fin = (unsigned long long)src[0] | ((unsigned long long)src[1] << 32);
         unsigned long long pv[4];
         pom_pow_fold(fin, p0, p1, p2, p3, pv);
