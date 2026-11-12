@@ -145,3 +145,15 @@ controls, setup and AMD sensor providers remain separate qualification work.
 AMD devices are discovered by PNP identity, without guessing VRAM from the
 32-bit AdapterRAM property. Unavailable sensors are shown as unavailable.
 A successful CI build does not certify installation or GPU operation on Windows.
+
+## gRPC and MSVC 14.51
+
+The pinned gRPC 1.81.1 dependency encounters MSVC template deduction errors in
+its fused filters (upstream issues [41970](https://github.com/grpc/grpc/issues/41970)
+and [42763](https://github.com/grpc/grpc/issues/42763)). The Windows grpc port's
+CMake project hook applies the method-pointer instantiation workaround reported
+by PetrSilar. Input and patched header SHA-256 values are pinned; changed sources
+fail configuration. It adds only unused local constexpr values, retaining the
+original return expression, C++20 standard and Protobuf ABI. Linux is unchanged.
+Both helper files are hashed into vcpkg's binary-cache ABI. Remote MSVC build
+success must still be verified after applying the workaround.

@@ -86,3 +86,10 @@ RPC fields; all22 verifier Rust files match node `b13faafe` and retain ISC
 notices. Native ledger scheduling/persistence and protocol transport are adapted
 as recorded in `ai-response-bridge/src/TRACE_UPSTREAM.json`. Runtime/PoM oracle
 provenance remains independently pinned. See `docs/upstream-refresh.md`.
+
+
+The Windows gRPC 1.81.1 build uses a hash-pinned, build-only MSVC method-pointer
+instantiation workaround in `tools/cmake/grpc_msvc.py`, adapted from PetrSilar's
+report in [grpc/grpc#41970](https://github.com/grpc/grpc/issues/41970).
+The dependency remains supplied by the pinned vcpkg port with its original
+notices. No gRPC protocol or runtime logic is changed by this workaround.

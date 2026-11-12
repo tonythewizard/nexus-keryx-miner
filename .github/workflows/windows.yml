@@ -41,9 +41,9 @@ jobs:
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: .local/vcpkg-cache
-          key: windows-vs2026-msvc1451-vcpkg-${{ hashFiles('tools/windows/vcpkg.json', 'tools/cmake/triplets/*.cmake') }}-v2-${{ github.sha }}
+          key: windows-vs2026-msvc1451-vcpkg-${{ hashFiles('tools/windows/vcpkg.json', 'tools/cmake/**') }}-v2-${{ github.sha }}
           restore-keys: |
-            windows-vs2026-msvc1451-vcpkg-${{ hashFiles('tools/windows/vcpkg.json', 'tools/cmake/triplets/*.cmake') }}-v2-
+            windows-vs2026-msvc1451-vcpkg-${{ hashFiles('tools/windows/vcpkg.json', 'tools/cmake/**') }}-v2-
             windows-vs2026-msvc1451-vcpkg-
       - name: Pinned Windows dependencies
         shell: pwsh
@@ -192,7 +192,7 @@ jobs:
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: .local/vcpkg-cache
-          key: windows-vs2026-msvc1451-vcpkg-${{ hashFiles('tools/windows/vcpkg.json', 'tools/cmake/triplets/*.cmake') }}-v2-${{ github.sha }}
+          key: windows-vs2026-msvc1451-vcpkg-${{ hashFiles('tools/windows/vcpkg.json', 'tools/cmake/**') }}-v2-${{ github.sha }}
 
   desktop:
     name: Windows desktop monitoring preview
