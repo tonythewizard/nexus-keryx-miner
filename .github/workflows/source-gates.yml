@@ -41,6 +41,15 @@ jobs:
             c++ -std=c++20 -pthread -Iinclude "tests/${case}_test.cpp" -o ".local/${case}"
             ".local/${case}"
           done
+      - name: Vulkan physical identity and ownership checks without GPU
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .local/tmp
+          c++ -std=c++20 -shared -fPIC tests/vulkan_binding_fixture.cpp -o .local/vulkan-binding-fixture.so
+          c++ -std=c++20 -Iinclude tests/vulkan_device_binding_test.cpp -ldl -o .local/vulkan-binding-test
+          .local/vulkan-binding-test .local/vulkan-binding-fixture.so .local/tmp/vulkan-binding
+
       - name: Portable desktop protocol checks
         run: python3 -m unittest discover -s tests/desktop -v
 

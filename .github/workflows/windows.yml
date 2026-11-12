@@ -205,6 +205,8 @@ jobs:
           persist-credentials: false
       - name: Portable desktop protocol tests
         run: python -m unittest discover -s tests/desktop -p test_windows_monitor.py -v
+      - name: Materialize verified desktop icons
+        run: python tools/prepare_assets.py
       - name: Prepare bundled Python and reviewed bridge sources
         run: python tools/prepare_windows_desktop.py
       - name: Embedded Python import and presentation checks

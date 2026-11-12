@@ -2,6 +2,8 @@
 #include "keryx/nexus/platform/shared_library.hpp"
 #include "keryx/nexus/platform/windows_device_lease.hpp"
 #include <array>
+#include <stdexcept>
+#include <string>
 #include <memory>
 #include <regex>
 #ifndef _WIN32
