@@ -1,4 +1,5 @@
 #include "keryx/nexus/developer_config.hpp"
+#include "keryx/nexus/platform/vulkan_device_binding.hpp"
 #include "keryx/nexus/gguf_reader.hpp"
 #include "keryx/nexus/opoi.hpp"
 #include "keryx/nexus/grpc_client.hpp"
@@ -492,8 +493,11 @@ int main(int argc, char **argv) {
   startup.record("MODEL_VERIFIED", StartupResult::Pass, "GGUF model and Merkle sidecar verified");
 
   // Load single resident Vulkan runtime for zero-dup PoM + H15 inference
+  std::unique_ptr<platform::VulkanDeviceBinding> device_binding;
   std::unique_ptr<opoi::StockLlamaRuntime> shared_runtime;
   try {
+    device_binding = std::make_unique<platform::VulkanDeviceBinding>(vulkan_lib, device_id, developer_data_root());
+    std::cout << "VULKAN_DEVICE_BOUND uuid=" << device_binding->uuid() << "\n" << std::flush;
     shared_runtime = std::make_unique<opoi::StockLlamaRuntime>(vulkan_lib, model_path);
     if (!shared_runtime->pom_ready()) {
       throw std::runtime_error("Resident Vulkan model failed pom_ready check");
@@ -763,7 +767,7 @@ int main(int argc, char **argv) {
       // Offline pool captures make no node RPC, but the client requires a loopback node endpoint.
       // In pool mode `endpoint` is the pool, so pass the node default the CUDA worker uses.
       pool_h15 = std::make_unique<ai::H15AuditClient>(*shared_runtime, gguf, merkle,
-          developer_data_root() / "state" / "pool-ai" / "engine", escrow_secret, "grpc://127.0.0.1:22110",
+          developer_data_root() / "state" / "pool-ai" / device_binding->uuid() / "engine", escrow_secret, "grpc://127.0.0.1:22110",
           official_model, true);
       pool_h15->set_gpu_owner([&](const std::function<void()> &work) {
         gpu_ownership.run_opoi([&] { shared_runtime->pom_release_pad(); }, [&] { work(); return true; }, [] {});
@@ -777,7 +781,7 @@ int main(int argc, char **argv) {
       }, [] {});
       const auto checked = pool_h15->verify_capture(2);
       if (!checked[0]) throw std::runtime_error("the traced self-test had no verified pieces");
-      pool_ai = std::make_unique<ai::PoolAiService>(developer_data_root() / "state" / "pool-ai" / "records", official_model,
+      pool_ai = std::make_unique<ai::PoolAiService>(developer_data_root() / "state" / "pool-ai" / device_binding->uuid() / "records", official_model,
           [&](std::string_view prompt, std::uint32_t tokens, const Hash &request) {
             telemetry.set_state("PAUSED", "RUNNING", "POOL_AI_TRACE", submit_enabled ? "ARMED" : "DISABLED");
             return gpu_ownership.run_opoi([&] { shared_runtime->pom_release_pad(); }, [&] {

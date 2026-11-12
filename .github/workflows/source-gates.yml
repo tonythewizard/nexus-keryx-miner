@@ -41,6 +41,9 @@ jobs:
             c++ -std=c++20 -pthread -Iinclude "tests/${case}_test.cpp" -o ".local/${case}"
             ".local/${case}"
           done
+      - name: Portable desktop protocol checks
+        run: python3 -m unittest discover -s tests/desktop -v
+
       - name: Desktop DOM checks
         run: node --test tests/desktop/tauri_dom_test.cjs
 

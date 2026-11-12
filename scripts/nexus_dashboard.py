@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from nexus_gpu_identity import display_devices
 import argparse
-import curses
+try:
+    import curses
+except ImportError:
+    curses = None  # Tauri presentation does not use the terminal frontend.
 import copy
 import json
 import math
@@ -783,7 +786,10 @@ def host_memory(model):
     if now - cached[0] < 2: return cached[1]
     values = {}
     try:
-        for line in Path('/proc/meminfo').read_text().splitlines():
+        if os.name == 'nt':
+            from nexus_windows_monitor import memory_status
+            values = memory_status()
+        for line in ([] if os.name == 'nt' else Path('/proc/meminfo').read_text().splitlines()):
             key, _, tail = line.partition(':')
             if key in ('MemTotal', 'MemAvailable'):
                 values[key] = int(tail.split()[0]) / 1048576
@@ -1936,10 +1942,11 @@ class TelemetryFollower:
 
 class TelemetrySessionReader:
     """Shared read-only session rollover for desktop and terminal attachments."""
-    def __init__(self, root, path=None, follow_latest=True):
+    def __init__(self, root, path=None, follow_latest=True, wallet_status=True):
         self.root = Path(root)
         self.path = Path(path).resolve() if path else None
         self.follow_latest = follow_latest
+        self.wallet_status = wallet_status
         self.follower = None
         self.model = DashboardModel()
         self.next_scan = 0
@@ -1956,7 +1963,8 @@ class TelemetrySessionReader:
                 follower = TelemetryFollower(candidate)
                 model = DashboardModel()
                 try:
-                    load_wallet_status(model)
+                    if self.wallet_status:
+                        load_wallet_status(model)
                     follower.bootstrap(model)
                 except Exception:
                     follower.close()

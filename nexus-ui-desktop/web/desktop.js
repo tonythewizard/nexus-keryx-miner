@@ -86,6 +86,10 @@ $("minimize").onclick = () =>
   invoke("window_action", { action: "minimize" }).catch(notice);
 async function command(name, value = "") {
   if (acting) return;
+  if (snapshot?.desktop?.read_only && name !== "preferences") {
+    notice(snapshot.desktop.control_reason || "Monitoring only");
+    return;
+  }
   acting = true;
   clearTimeout(timer);
   notice("Working… mining continues");
@@ -108,6 +112,10 @@ async function command(name, value = "") {
 }
 async function importFile(kind) {
   if (acting) return;
+  if (snapshot?.desktop?.read_only) {
+    notice(snapshot.desktop.control_reason || "Monitoring only");
+    return;
+  }
   acting = true;
   clearTimeout(timer);
   try {
@@ -195,6 +203,7 @@ function inlineActions(panel, name, frame) {
   const d = frame.desktop,
     p = d.preferences,
     actions = [];
+  if (d.read_only) return actions;
   if (tab === 1) {
     const device = d.devices.find((x) => x.id === panel.device_id);
     if (name === "Device enabled" && device) {
@@ -749,11 +758,17 @@ function controlsPage(frame) {
     button("Force restart", () => command("force_restart"), "btn-orange"),
     button("Stop miner", () => command("stop"), "btn-red"),
   );
+  if (frame.desktop.read_only) {
+    for (const control of buttons.children) {
+      control.disabled = true;
+      control.title = frame.desktop.control_reason;
+    }
+  }
   mining.append(
     buttons,
     make(
       "p",
-      "Uses the existing session controllers. The node, wallet and journal are preserved.",
+      frame.desktop.read_only ? frame.desktop.control_reason : "Uses the existing session controllers. The node, wallet and journal are preserved.",
       "muted",
     ),
   );
@@ -964,7 +979,7 @@ function render(frame) {
   const memory = frame.memory;
   text(
     "ram",
-    memory
+    Number.isFinite(memory?.MemTotal) && Number.isFinite(memory?.MemAvailable)
       ? `RAM ${(memory.MemTotal - memory.MemAvailable).toFixed(1)}/${memory.MemTotal.toFixed(1)}G`
       : "RAM N/A",
   );
@@ -980,7 +995,7 @@ function render(frame) {
       : "LAST " + (frame.state.mining || "N/A");
   text(
     "status",
-    `● ${frame.status}    ${(frame.network || "UNKNOWN").toUpperCase()}  NODE ${sync}    ${frame.hashrate_label || "PoM"} ${frame.hashrate || "N/A"}    ${mining}    AI ${frame.state.inference || "N/A"}    UP ${frame.uptime || "N/A"}`,
+    `● ${frame.status}${frame.desktop.read_only ? " · MONITORING" : ""}    ${(frame.network || "UNKNOWN").toUpperCase()}  NODE ${sync}    ${frame.hashrate_label || "PoM"} ${frame.hashrate || "N/A"}    ${mining}    AI ${frame.state.inference || "N/A"}    UP ${frame.uptime || "N/A"}`,
   );
   const key = JSON.stringify([
     tab,

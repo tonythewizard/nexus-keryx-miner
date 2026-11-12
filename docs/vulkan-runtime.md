@@ -121,7 +121,7 @@ nexus-live-vulkan-worker --keryxd-address stratum+tcp://<pool>:<port> \
   --address keryx:<payout> --worker <name> \
   --model <model.gguf> --tree <pom-tree.bin> --meta <pom-tree.json> \
   --vulkan-lib <keryx-llama-vk library> --oracle <nexus-m21-oracle> --enable-submit \
-  --enable-ai-response
+  --enable-ai-response --device GPU-<AMD-device-UUID>
 ```
 
 `scripts/nexus_launcher.py --device amd --pool-url ... --live --enable-ai-response`
@@ -172,3 +172,19 @@ Environment variables:
 | `KERYX_INFER_GPU` | Raw Vulkan device index to use. The default is the first discrete GPU. |
 | `KERYX_POM_V4_KERNEL=dot` | Forces the `v_dot4` kernel. |
 | `KERYX_VK_LOG` | Runtime log level on stderr. The default is `info`. |
+
+## Physical device admission
+
+The integration worker requires `--device GPU-<UUID>` or
+`--device pci:dddd:bb:ss.f` (PCI requires the driver's pci_bus_info extension).
+The runtime resolves that physical identity, rejects non-AMD matches, and pins
+both inference and the PoM walk before model load. An index or a model name is
+not an identity. The worker acquires an exclusive UUID lease before loading
+weights. `nexus_launcher.py` passes `--vulkan-device` through; it must be set
+explicitly for AMD. Legacy runtime libraries without the device-selection
+export are refused by this worker. Existing installed artifacts are unchanged.
+
+AMD pool AI state is now under `state/pool-ai/<device-UUID>/`, independent of
+the CUDA worker. Previous trace records must be retained until their audit
+obligations have expired; they are never automatically deleted or migrated.
+The new admission and tracing need hardware qualification before deployment.

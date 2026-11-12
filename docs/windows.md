@@ -88,7 +88,7 @@ strict streaming uses aligned unbuffered I/O.
 
 ## Build from source
 
-Install Visual Studio 2022 with Desktop development with C++, CMake 3.25+,
+Install Visual Studio 2026 (MSVC 14.51) with Desktop development with C++, CMake 4.0+,
 Python 3.11+, Git and Rust 1.88+. Build dependencies are pinned in
 `tools/windows/vcpkg.json`; the workflow pins the vcpkg checkout too. The overlay
 triplets build Release dependencies only and compile Windows CMake dependencies
@@ -120,3 +120,28 @@ trace patch. Build outputs remain ignored.
 `scan-root` and the oracle's full root audit retain Linux-specific host/process
 health guards and explicitly refuse on Windows. The independent proof verifier
 and the GGUF/Merkle parser do not bypass validation to compensate.
+
+The integration CI pins MSVC toolset 14.51, CUDA 13.2.0 and the Visual Studio 2026
+runner. Linux keeps its separately qualified CUDA toolchain. The Windows compiler
+migration requires a new CI qualification; older artifacts retain their original
+provenance. CUDA supports VS2026 in its 13.2 compiler matrix.
+
+## Desktop integration preview
+
+The integration branch adds a Windows Tauri monitoring build. Prepare its
+reviewed bridge and checksum-pinned embedded Python with
+`python tools/prepare_windows_desktop.py`, then run `cargo tauri build --config
+src-tauri/tauri.windows.conf.json -- --locked` from `nexus-ui-desktop` with the
+pinned Tauri CLI 2.12.3. The NSIS installer uses WebView2. No system Python or
+source checkout is needed after installation. The default data directory is
+`%LOCALAPPDATA%/nexus-keryx-miner`; `NEXUS_DATA_DIR` may explicitly select the
+existing private data directory. The UI follows `logs/nexus-ui-inference-*.jsonl`
+using the same model, panels, filters and stale handling as Linux.
+
+This milestone is **monitoring only**. Presentation preferences work; wallet,
+worker, API and service mutations are refused in the bridge and disabled in
+the UI. Closing the window never signals a worker. Windows managed worker
+controls, setup and AMD sensor providers remain separate qualification work.
+AMD devices are discovered by PNP identity, without guessing VRAM from the
+32-bit AdapterRAM property. Unavailable sensors are shown as unavailable.
+A successful CI build does not certify installation or GPU operation on Windows.

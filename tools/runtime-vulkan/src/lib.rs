@@ -398,6 +398,20 @@ pub extern "C" fn keryx_llama_vk_abi() -> c_int {
     ABI
 }
 
+/// Binds the AMD device by physical identity before load. Returns the canonical
+/// UUID (including its NUL) to the host for its interprocess lease.
+#[no_mangle]
+pub unsafe extern "C" fn keryx_llama_vk_select_device(identity: *const c_char, uuid: *mut c_char, cap: usize) -> c_int {
+    guard(-1, || {
+        if uuid.is_null() || cap < 41 { return Err("device UUID buffer too small".into()); }
+        let selected = device::select(text(identity)?)?;
+        let selected = CString::new(selected).map_err(|e| e.to_string())?;
+        let bytes = selected.as_bytes_with_nul();
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), uuid.cast(), bytes.len());
+        Ok(0)
+    })
+}
+
 /// Loads `gguf` on the Vulkan GPU and prepares its PoM walk. `gpu` is ignored: the device is the
 /// one described in the crate docs. `n_ctx` caps each request's context.
 #[no_mangle]
@@ -864,6 +878,19 @@ pub unsafe extern "C" fn keryx_llama_seq_replay(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn device_selection_rejects_implicit_identity_without_opening_vulkan() {
+        assert!(device::select("0").is_err());
+        assert!(device::select("AMD Radeon").is_err());
+        let id = CString::new("0").unwrap();
+        let mut uuid = [0i8; 64];
+        unsafe {
+            assert_eq!(keryx_llama_vk_select_device(std::ptr::null(), uuid.as_mut_ptr(), 64), -1);
+            assert_eq!(keryx_llama_vk_select_device(id.as_ptr(), std::ptr::null_mut(), 64), -1);
+            assert_eq!(keryx_llama_vk_select_device(id.as_ptr(), uuid.as_mut_ptr(), 1), -1);
+        }
+    }
 
     #[test]
     fn offsets_stay_inside_the_batch() {

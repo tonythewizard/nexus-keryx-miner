@@ -53,7 +53,15 @@ pub fn shared_device() -> Result<SharedDevice, String> {
     unsafe {
         let entry = ash::Entry::load().map_err(|e| format!("Vulkan loader not found: {e}"))?;
         let instance = ash::Instance::load(entry.static_fn(), vk::Instance::from_raw(instance as u64));
-        Ok(classify(&instance, vk::PhysicalDevice::from_raw(physical as u64)))
+        let physical = vk::PhysicalDevice::from_raw(physical as u64);
+        if let Ok(expected) = std::env::var("NEXUS_VK_EXPECTED_UUID") {
+            let mut id = vk::PhysicalDeviceIDProperties::default();
+            instance.get_physical_device_properties2(physical, &mut vk::PhysicalDeviceProperties2::default().push_next(&mut id));
+            let h: String = id.device_uuid.iter().map(|b| format!("{b:02x}")).collect();
+            let actual = format!("GPU-{}-{}-{}-{}-{}", &h[..8], &h[8..12], &h[12..16], &h[16..20], &h[20..]);
+            if actual != expected { return Err("inference GPU differs from the selected physical device".into()); }
+        }
+        Ok(classify(&instance, physical))
     }
 }
 
@@ -119,4 +127,51 @@ unsafe fn classify(instance: &ash::Instance, pd: vk::PhysicalDevice) -> SharedDe
         && dot.integer_dot_product4x8_bit_packed_signed_accelerated == vk::TRUE;
 
     SharedDevice { name, vendor_id: props.vendor_id, arch, matrix_cores, integer_dot }
+}
+
+/// Resolve an explicit UUID/PCI identity before the inference engine opens a
+/// logical device. No selection by ordinal or model name is accepted.
+pub fn select(identity: &str) -> Result<String, String> {
+    let wanted = identity.to_ascii_lowercase();
+    if !wanted.starts_with("gpu-") && !wanted.starts_with("pci:") {
+        return Err("an explicit GPU UUID or pci:dddd:bb:ss.f identity is required".into());
+    }
+    unsafe {
+        let entry = ash::Entry::load().map_err(|e| e.to_string())?;
+        let app = vk::ApplicationInfo::default().api_version(vk::make_api_version(0, 1, 3, 0));
+        let instance = entry.create_instance(&vk::InstanceCreateInfo::default().application_info(&app), None)
+            .map_err(|e| e.to_string())?;
+        let result = (|| {
+            let mut found = None;
+            for (index, physical) in instance.enumerate_physical_devices().map_err(|e| e.to_string())?.into_iter().enumerate() {
+                let mut id = vk::PhysicalDeviceIDProperties::default();
+                let extensions = instance.enumerate_device_extension_properties(physical).map_err(|e| e.to_string())?;
+                let has_pci = extensions.iter().any(|e| e.extension_name_as_c_str().ok() == Some(c"VK_EXT_pci_bus_info"));
+                let mut pci = vk::PhysicalDevicePCIBusInfoPropertiesEXT::default();
+                let mut props = vk::PhysicalDeviceProperties2::default().push_next(&mut id);
+                if has_pci { props = props.push_next(&mut pci); }
+                instance.get_physical_device_properties2(physical, &mut props);
+                let vendor = props.properties.vendor_id;
+                let h: String = id.device_uuid.iter().map(|b| format!("{b:02x}")).collect();
+                let uuid = format!("GPU-{}-{}-{}-{}-{}", &h[..8], &h[8..12], &h[12..16], &h[16..20], &h[20..]);
+                let pci_id = format!("pci:{:04x}:{:02x}:{:02x}.{}", pci.pci_domain, pci.pci_bus, pci.pci_device, pci.pci_function);
+                if wanted == uuid.to_ascii_lowercase() || (has_pci && wanted == pci_id) {
+                    // This runtime is admitted for the AMD worker only. A mixed
+                    // Windows rig must never silently borrow its NVIDIA GPU.
+                    if vendor != VENDOR_AMD { return Err("selected Vulkan device is not AMD".into()); }
+                    if id.device_uuid.iter().all(|&b| b == 0) || found.is_some() {
+                        return Err("ambiguous or empty Vulkan device UUID".into());
+                    }
+                    found = Some((index, uuid));
+                }
+            }
+            let (index, uuid) = found.ok_or("selected AMD Vulkan device was not found")?;
+            std::env::set_var("NEXUS_VK_EXPECTED_UUID", &uuid);
+            std::env::set_var("KERYX_INFER_GPU", index.to_string());
+            std::env::set_var("GGML_VK_VISIBLE_DEVICES", index.to_string());
+            Ok(uuid)
+        })();
+        instance.destroy_instance(None);
+        result
+    }
 }

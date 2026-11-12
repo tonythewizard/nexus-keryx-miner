@@ -236,10 +236,10 @@ if(NEXUS_ENABLE_VULKAN_RUNTIME)
       "Cargo target directory of tools/runtime-vulkan")
   if(WIN32)
     set(NEXUS_VULKAN_RUNTIME_BUILT "${NEXUS_VULKAN_RUNTIME_TARGET_DIR}/release/keryx_llama_vk.dll")
-    set(NEXUS_VULKAN_RUNTIME "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/keryx-llama-vk.dll")
+    set(NEXUS_VULKAN_RUNTIME "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<$<BOOL:${CMAKE_CONFIGURATION_TYPES}>:$<CONFIG>/>keryx-llama-vk.dll")
   else()
     set(NEXUS_VULKAN_RUNTIME_BUILT "${NEXUS_VULKAN_RUNTIME_TARGET_DIR}/release/libkeryx_llama_vk.so")
-    set(NEXUS_VULKAN_RUNTIME "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/libkeryx-llama-vk.so")
+    set(NEXUS_VULKAN_RUNTIME "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<$<BOOL:${CMAKE_CONFIGURATION_TYPES}>:$<CONFIG>/>libkeryx-llama-vk.so")
   endif()
   file(GLOB NEXUS_VULKAN_RUNTIME_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/tools/runtime-vulkan/src/*.rs"
@@ -248,7 +248,8 @@ if(NEXUS_ENABLE_VULKAN_RUNTIME)
   add_custom_command(OUTPUT "${NEXUS_VULKAN_RUNTIME}"
     COMMAND ${CMAKE_COMMAND} -E env "CARGO_TARGET_DIR=${NEXUS_VULKAN_RUNTIME_TARGET_DIR}"
       ${CARGO_EXECUTABLE} build --release --locked --manifest-path "${CMAKE_CURRENT_SOURCE_DIR}/tools/runtime-vulkan/Cargo.toml"
-    COMMAND ${CMAKE_COMMAND} -E copy "${NEXUS_VULKAN_RUNTIME_BUILT}" "${NEXUS_VULKAN_RUNTIME}"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<PATH:GET_PARENT_PATH,${NEXUS_VULKAN_RUNTIME}>"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${NEXUS_VULKAN_RUNTIME_BUILT}" "${NEXUS_VULKAN_RUNTIME}"
     DEPENDS tools/runtime-vulkan/Cargo.toml tools/runtime-vulkan/Cargo.lock
       vendor/keryx-miner-rdna3/src/llm_engine.rs vendor/keryx-miner-rdna3/keryx-vulkan/build.rs
       ${NEXUS_VULKAN_RUNTIME_SOURCES}
@@ -1049,3 +1050,13 @@ endif()
 add_executable(nexus-upstream-policy-test tests/upstream_policy_test.cpp)
 target_include_directories(nexus-upstream-policy-test PRIVATE include)
 add_test(NAME upstream_sibling_wait_and_sticky_oom_tier_policy COMMAND nexus-upstream-policy-test)
+
+if(BUILD_TESTING AND UNIX)
+  add_library(nexus-vulkan-binding-fixture SHARED tests/vulkan_binding_fixture.cpp)
+  add_executable(nexus-vulkan-device-binding-test tests/vulkan_device_binding_test.cpp)
+  target_include_directories(nexus-vulkan-device-binding-test PRIVATE include)
+  target_link_libraries(nexus-vulkan-device-binding-test PRIVATE ${CMAKE_DL_LIBS})
+  add_test(NAME vulkan_device_identity_and_exclusive_lease
+    COMMAND nexus-vulkan-device-binding-test $<TARGET_FILE:nexus-vulkan-binding-fixture>
+      "${CMAKE_BINARY_DIR}/test-data/vulkan-binding")
+endif()

@@ -16,7 +16,7 @@ jobs:
   cpu:
     name: Windows x64
     needs: source
-    runs-on: windows-2022
+    runs-on: windows-2025-vs2026
     timeout-minutes: 180
     env:
       VCPKG_DEFAULT_TRIPLET: x64-windows-static-md
@@ -27,13 +27,13 @@ jobs:
           persist-credentials: false
       - name: Canonical trace patch checkout regression
         run: python -m unittest discover -s tests/distribution -p test_runtime_patch.py -v
-      - name: Fetch pinned CUDA 13.0.2 license
+      - name: Fetch pinned CUDA 13.2.0 license
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force build/cuda-license | Out-Null
-          Invoke-WebRequest -Uri 'https://docs.nvidia.com/cuda/archive/13.0.2/pdf/EULA.pdf' -OutFile build/cuda-license/EULA.pdf
+          Invoke-WebRequest -Uri 'https://docs.nvidia.com/cuda/archive/13.2.0/pdf/EULA.pdf' -OutFile build/cuda-license/EULA.pdf
           $digest = (Get-FileHash build/cuda-license/EULA.pdf -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($digest -ne 'c365e3bfe9ed70d7fb7dbacc4fdd4b4a15fb951be5440f0f6bd95e3c935e93ef') {
+          if ($digest -ne '5fd9ad333f81863750bac9d471ec48303e36fcd26a493341f02a1ad5561a1b8c') {
             throw 'Pinned CUDA license checksum mismatch'
           }
       - name: Restore compiled dependencies
@@ -41,10 +41,10 @@ jobs:
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: .local/vcpkg-cache
-          key: windows-vcpkg-${{ hashFiles('tools/windows/vcpkg.json', 'tools/cmake/triplets/*.cmake') }}-v2-${{ github.sha }}
+          key: windows-vs2026-msvc1451-vcpkg-${{ hashFiles('tools/windows/vcpkg.json', 'tools/cmake/triplets/*.cmake') }}-v2-${{ github.sha }}
           restore-keys: |
-            windows-vcpkg-${{ hashFiles('tools/windows/vcpkg.json', 'tools/cmake/triplets/*.cmake') }}-v2-
-            windows-vcpkg-
+            windows-vs2026-msvc1451-vcpkg-${{ hashFiles('tools/windows/vcpkg.json', 'tools/cmake/triplets/*.cmake') }}-v2-
+            windows-vs2026-msvc1451-vcpkg-
       - name: Pinned Windows dependencies
         shell: pwsh
         run: |
@@ -61,7 +61,7 @@ jobs:
       - name: Configure MSVC x64
         shell: pwsh
         run: |
-          cmake -S . -B build/windows -A x64 `
+          cmake -S . -B build/windows -G "Visual Studio 18 2026" -A x64 -T "version=14.51" `
             -DCMAKE_TOOLCHAIN_FILE="$pwd/.local/vcpkg/scripts/buildsystems/vcpkg.cmake" `
             -DVCPKG_MANIFEST_DIR="$pwd/tools/windows" -DVCPKG_OVERLAY_TRIPLETS="$pwd/tools/cmake/triplets" `
             -DVCPKG_TARGET_TRIPLET=x64-windows-static-md -DVCPKG_HOST_TRIPLET=x64-windows-static-md `
@@ -75,13 +75,13 @@ jobs:
       - name: Install CUDA compiler (no GPU execution)
         uses: Jimver/cuda-toolkit@b8bf9c6c28f8a92fbb04dcfcaee872e60c57462d
         with:
-          cuda: '13.0.2'
+          cuda: '13.2.0'
           sub-packages: '["nvcc", "crt", "nvvm", "thrust", "cudart", "nvrtc", "cublas", "cublas_dev", "visual_studio_integration"]'
           use-github-cache: 'true'
       - name: Configure native NVIDIA worker
         shell: pwsh
         run: |
-          cmake -S . -B build/windows-worker -A x64 `
+          cmake -S . -B build/windows-worker -G "Visual Studio 18 2026" -A x64 -T "version=14.51" `
             -DCMAKE_TOOLCHAIN_FILE="$pwd/.local/vcpkg/scripts/buildsystems/vcpkg.cmake" `
             -DVCPKG_MANIFEST_DIR="$pwd/tools/windows" -DVCPKG_OVERLAY_TRIPLETS="$pwd/tools/cmake/triplets" `
             -DVCPKG_TARGET_TRIPLET=x64-windows-static-md -DVCPKG_HOST_TRIPLET=x64-windows-static-md -DVCPKG_MANIFEST_FEATURES=worker `
@@ -137,12 +137,12 @@ jobs:
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: build/runtime-install
-          key: ${{ runner.os }}-inference-abi9-cuda13.0.2-${{ hashFiles('tools/runtime/**', 'tools/cmake/cuda-architectures.cmake', 'vendor/keryx-trace-abi6/tools/keryx-llama/**') }}-v1
+          key: ${{ runner.os }}-inference-abi9-vs2026-msvc1451-cuda13.2.0-${{ hashFiles('tools/runtime/**', 'tools/cmake/cuda-architectures.cmake', 'vendor/keryx-trace-abi6/tools/keryx-llama/**') }}-v1
       - name: Build matching inference runtime
         if: steps.runtimecache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
-          cmake -S tools/runtime -B build/runtime -A x64 -DNEXUS_RUNTIME_ABI=9
+          cmake -S tools/runtime -B build/runtime -G "Visual Studio 18 2026" -A x64 -T "version=14.51" -DNEXUS_RUNTIME_ABI=9
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           cmake --build build/runtime --config Release --target nexus_inference_runtime --parallel 2
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
@@ -166,8 +166,8 @@ jobs:
             }
           }
           $vswhere = "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe"
-          $vsroot = & $vswhere -latest -products '*' -property installationPath
-          $crt = Get-ChildItem "$vsroot/VC/Redist/MSVC/*/x64/Microsoft.VC143.CRT" -Directory | Sort-Object FullName -Descending | Select-Object -First 1
+          $vsroot = & $vswhere -version "[18.0,19.0)" -latest -products '*' -property installationPath
+          $crt = Get-ChildItem "$vsroot/VC/Redist/MSVC/*/x64/Microsoft.VC*.CRT" -Directory | Sort-Object FullName -Descending | Select-Object -First 1
           if (-not $crt) { throw 'MSVC redistribution directory unavailable' }
           $dumpbin = Get-ChildItem "$vsroot/VC/Tools/MSVC/*/bin/Hostx64/x64/dumpbin.exe" | Sort-Object FullName -Descending | Select-Object -First 1
           if (-not $dumpbin) { throw 'MSVC dependency inspector unavailable' }
@@ -192,7 +192,40 @@ jobs:
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: .local/vcpkg-cache
-          key: windows-vcpkg-${{ hashFiles('tools/windows/vcpkg.json', 'tools/cmake/triplets/*.cmake') }}-v2-${{ github.sha }}
+          key: windows-vs2026-msvc1451-vcpkg-${{ hashFiles('tools/windows/vcpkg.json', 'tools/cmake/triplets/*.cmake') }}-v2-${{ github.sha }}
+
+  desktop:
+    name: Windows desktop monitoring preview
+    needs: source
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Portable desktop protocol tests
+        run: python -m unittest discover -s tests/desktop -p test_windows_monitor.py -v
+      - name: Prepare bundled Python and reviewed bridge sources
+        run: python tools/prepare_windows_desktop.py
+      - name: Embedded Python import and presentation checks
+        shell: pwsh
+        run: |
+          $env:NEXUS_DATA_DIR = "$pwd/.local/tmp/desktop-smoke"
+          New-Item -ItemType Directory -Force $env:NEXUS_DATA_DIR | Out-Null
+          $embedded = "$pwd/nexus-ui-desktop/src-tauri/.local/bridge/python/python.exe"
+          & $embedded -c "from nexus_windows_monitor import WindowsMonitor; import os; m=WindowsMonitor(os.environ['NEXUS_DATA_DIR']); [m.snapshot(t,'ALL',46) for t in range(9)]"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Install pinned desktop builder
+        run: cargo install tauri-cli --version 2.12.3 --locked
+      - name: Build Windows desktop and NSIS installer
+        working-directory: nexus-ui-desktop
+        run: cargo tauri build --config src-tauri/tauri.windows.conf.json -- --locked
+      - name: Preserve desktop preview for manual Windows qualification
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: windows-desktop-monitoring-preview
+          path: nexus-ui-desktop/src-tauri/target/release/bundle/nsis/*-setup.exe
+          if-no-files-found: error
 
   linux:
     name: Linux x86-64

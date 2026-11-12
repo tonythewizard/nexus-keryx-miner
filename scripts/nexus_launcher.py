@@ -58,6 +58,7 @@ def parse_args():
     parser.add_argument("--pool-url", type=str, default="", help="Stratum pool URL (optional, e.g. stratum+tcp://pool.keryx.net:4444)")
     parser.add_argument("--pool-worker", type=str, default="", help="Stratum worker name (optional, defaults to address)")
     parser.add_argument("--pool-password", type=str, default="x", help="Stratum pool password (e.g. d=4 for fixed difficulty, default: x)")
+    parser.add_argument("--vulkan-device", default="", help="Explicit AMD GPU UUID or pci:dddd:bb:ss.f identity")
     parser.add_argument("--vulkan-lib", type=str, default="",
                         help="Vulkan runtime library (default: keryx-llama-vk next to the Vulkan worker)")
     parser.add_argument("--oracle", type=str, default="",
@@ -173,6 +174,8 @@ def main():
     # 2. AMD / Vulkan Worker
     if target_gpus in ("amd", "dual"):
         try:
+            if not args.vulkan_device:
+                raise ValueError("--vulkan-device must name the AMD GPU UUID or PCI identity")
             vk_bin = find_executable(root_dir, "nexus-live-vulkan-worker")
             vk_env = env.copy()
             vk_env["NEXUS_VULKAN_BATCH_SIZE"] = str(args.vulkan_batch)
@@ -196,6 +199,7 @@ def main():
                 "--address", args.address,
                 "--extra-data", "NEXUS v0.0.5",
                 "--vulkan-lib", str(vulkan_lib.resolve()),
+                "--device", args.vulkan_device,
             ]
             if args.pool_url:
                 cmd.extend([
