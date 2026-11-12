@@ -3,8 +3,22 @@
 import hashlib
 import json
 from pathlib import Path
+import struct
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def windows_icon(png):
+    """Wrap the verified PNG unchanged in a single-image Windows ICO."""
+    if len(png) < 33 or png[:8] != b"\x89PNG\r\n\x1a\n" or png[12:16] != b"IHDR":
+        raise ValueError("Invalid desktop PNG")
+    width, height = struct.unpack(">II", png[16:24])
+    if not 1 <= width <= 256 or not 1 <= height <= 256 or png[24:26] != b"\x08\x06":
+        raise ValueError("Desktop ICO requires an 8-bit RGBA PNG up to 256 pixels")
+    header = struct.pack("<HHH", 0, 1, 1)
+    entry = struct.pack("<BBBBHHII", width % 256, height % 256, 0, 0,
+                        1, 32, len(png), 22)
+    return header + entry + png
 
 
 def prepare():
@@ -21,7 +35,14 @@ def prepare():
         if output.exists() and output.read_bytes() == data:
             continue
         output.write_bytes(data)
-    print(f"Prepared {len(assets)} verified local build inputs")
+    png = ROOT / "nexus-ui-desktop/src-tauri/icons/icon.png"
+    ico = png.with_suffix(".ico")
+    if ico.is_symlink() or not ico.parent.resolve().is_relative_to(ROOT):
+        raise ValueError("Unsafe Windows icon destination")
+    data = windows_icon(png.read_bytes())
+    if not ico.exists() or ico.read_bytes() != data:
+        ico.write_bytes(data)
+    print(f"Prepared {len(assets)} verified local build inputs and Windows ICO")
 
 
 if __name__ == "__main__":

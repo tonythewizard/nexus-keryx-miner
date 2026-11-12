@@ -2,6 +2,7 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
+    "icon": ["icons/icon.ico"],
     "resources": {".local/bridge/": "bridge/"},
     "windows": {
       "webviewInstallMode": {"type": "downloadBootstrapper", "silent": true},
