@@ -24,6 +24,7 @@ __pycache__/
 *.spv
 *.bin
 *.png
+nexus-ui-desktop/src-tauri/icons/icon.ico
 *.gguf
 *.db
 *.sqlite*

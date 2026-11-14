@@ -22,6 +22,7 @@ is kept in `AGENTS.md`.
 | Model/tree | `src/model/gguf_reader.cpp`: read-only GGUF access, bounded tile reads and Merkle indexing; `gguf_main.cpp` provides inspection tools |
 | CUDA | `consensus/cuda_walk.cpp`, `cuda_resident.cpp`, `*.cu`: device code and Driver API host integration |
 | Vulkan | `src/gpu/vulkan_walk_engine.cpp`, `vulkan_bda_resident_engine.cpp`: JIT/resident execution and explicit device admission |
+| Vulkan runtime | `tools/runtime-vulkan`, `vendor/keryx-miner-rdna3`: the `keryx_llama` library (ABI 9) `nexus-live-vulkan-worker` loads for llama.cpp Vulkan inference, traced pool AI and the PoM v5 walk on AMD GPUs; see `docs/vulkan-runtime.md` |
 | JIT | `experiments/vulkan_jit/ast_lower.py`, `translate.py`, `banked_source.py`: restricted CUDA-source lowering into GLSL/SPIR-V; unsupported patterns must fail closed |
 | Lane coordination | `src/gpu/gpu_work_coordinator.cpp`, `secondary_work_lane.cpp`, corresponding headers: nonce ownership, cancellation, pause/drain and preemption |
 | Node/RPC | `src/network/grpc_client.cpp`, `grpc_header.cpp`, `live_job_queue.cpp`: templates, chain changes, reconnection and current job leases |

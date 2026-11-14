@@ -22,6 +22,7 @@ endif()
 option(NEXUS_ENABLE_GRPC "Build native gRPC ingress, AI and escrow components" OFF)
 option(NEXUS_ENABLE_CUDA "Build the independent CUDA PoM backend" OFF)
 option(NEXUS_ENABLE_VULKAN_JIT "Build AMD/Cross-vendor Vulkan worker and tools" OFF)
+option(NEXUS_ENABLE_VULKAN_RUNTIME "Build the Vulkan inference/PoM runtime loaded by nexus-live-vulkan-worker" OFF)
 set(NEXUS_VULKAN_HEADERS "" CACHE PATH "Isolated official Vulkan-Headers include directory")
 set(NEXUS_RUST_ORACLE "" CACHE FILEPATH "Built official Rust oracle executable")
 set(NEXUS_LIVE_CAPTURE_DIR "" CACHE PATH "Persistent directory with verified captured templates")
@@ -225,6 +226,41 @@ add_executable(nexus-pom-host-replay tests/pom_host_replay.cpp)
 target_link_libraries(nexus-pom-host-replay PRIVATE nexus_model)
 add_executable(nexus-gguf-inspect src/model/gguf_main.cpp)
 target_link_libraries(nexus-gguf-inspect PRIVATE nexus_model)
+
+if(NEXUS_ENABLE_VULKAN_RUNTIME)
+  # Cargo builds llama.cpp (Vulkan backend) and the PoM walk shaders; that needs glslc from the
+  # Vulkan SDK and libclang for bindgen. On Windows the Rust toolchain must target MSVC, and the
+  # target directory should be short: llama.cpp's nested shader build exceeds 260 characters.
+  find_program(CARGO_EXECUTABLE cargo REQUIRED)
+  set(NEXUS_VULKAN_RUNTIME_TARGET_DIR "${CMAKE_CURRENT_BINARY_DIR}/vk-runtime" CACHE PATH
+      "Cargo target directory of tools/runtime-vulkan")
+  if(WIN32)
+    set(NEXUS_VULKAN_RUNTIME_BUILT "${NEXUS_VULKAN_RUNTIME_TARGET_DIR}/release/keryx_llama_vk.dll")
+    set(NEXUS_VULKAN_RUNTIME "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<$<BOOL:${CMAKE_CONFIGURATION_TYPES}>:$<CONFIG>/>keryx-llama-vk.dll")
+  else()
+    set(NEXUS_VULKAN_RUNTIME_BUILT "${NEXUS_VULKAN_RUNTIME_TARGET_DIR}/release/libkeryx_llama_vk.so")
+    set(NEXUS_VULKAN_RUNTIME "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<$<BOOL:${CMAKE_CONFIGURATION_TYPES}>:$<CONFIG>/>libkeryx-llama-vk.so")
+  endif()
+  file(GLOB NEXUS_VULKAN_RUNTIME_SOURCES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/tools/runtime-vulkan/src/*.rs"
+    "${CMAKE_CURRENT_SOURCE_DIR}/vendor/keryx-miner-rdna3/keryx-vulkan/src/*.rs"
+    "${CMAKE_CURRENT_SOURCE_DIR}/vendor/keryx-miner-rdna3/keryx-vulkan/shaders/*.comp")
+  add_custom_command(OUTPUT "${NEXUS_VULKAN_RUNTIME}"
+    COMMAND ${CMAKE_COMMAND} -E env "CARGO_TARGET_DIR=${NEXUS_VULKAN_RUNTIME_TARGET_DIR}"
+      ${CARGO_EXECUTABLE} build --release --locked --manifest-path "${CMAKE_CURRENT_SOURCE_DIR}/tools/runtime-vulkan/Cargo.toml"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<PATH:GET_PARENT_PATH,${NEXUS_VULKAN_RUNTIME}>"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${NEXUS_VULKAN_RUNTIME_BUILT}" "${NEXUS_VULKAN_RUNTIME}"
+    DEPENDS tools/runtime-vulkan/Cargo.toml tools/runtime-vulkan/Cargo.lock
+      vendor/keryx-miner-rdna3/src/llm_engine.rs vendor/keryx-miner-rdna3/keryx-vulkan/build.rs
+      ${NEXUS_VULKAN_RUNTIME_SOURCES}
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" VERBATIM)
+  add_custom_target(nexus_vulkan_runtime ALL DEPENDS "${NEXUS_VULKAN_RUNTIME}")
+  # Uses the GPU, so it is built and run explicitly, never as part of ctest:
+  #   nexus-vulkan-runtime-parity-test <runtime library> <tier-0 model.gguf> [jobs]
+  add_executable(nexus-vulkan-runtime-parity-test EXCLUDE_FROM_ALL tests/vulkan_runtime_parity_test.cpp)
+  target_link_libraries(nexus-vulkan-runtime-parity-test PRIVATE nexus_model ${CMAKE_DL_LIBS})
+  add_dependencies(nexus-vulkan-runtime-parity-test nexus_vulkan_runtime)
+endif()
 
 if(WIN32 AND NOT NEXUS_ENABLE_GRPC)
   include("${CMAKE_CURRENT_SOURCE_DIR}/tools/cmake/windows-tests.cmake")
@@ -1014,3 +1050,13 @@ endif()
 add_executable(nexus-upstream-policy-test tests/upstream_policy_test.cpp)
 target_include_directories(nexus-upstream-policy-test PRIVATE include)
 add_test(NAME upstream_sibling_wait_and_sticky_oom_tier_policy COMMAND nexus-upstream-policy-test)
+
+if(BUILD_TESTING AND UNIX)
+  add_library(nexus-vulkan-binding-fixture SHARED tests/vulkan_binding_fixture.cpp)
+  add_executable(nexus-vulkan-device-binding-test tests/vulkan_device_binding_test.cpp)
+  target_include_directories(nexus-vulkan-device-binding-test PRIVATE include)
+  target_link_libraries(nexus-vulkan-device-binding-test PRIVATE ${CMAKE_DL_LIBS})
+  add_test(NAME vulkan_device_identity_and_exclusive_lease
+    COMMAND nexus-vulkan-device-binding-test $<TARGET_FILE:nexus-vulkan-binding-fixture>
+      "${CMAKE_BINARY_DIR}/test-data/vulkan-binding")
+endif()

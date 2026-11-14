@@ -129,6 +129,8 @@ struct StratumChallenge {
 struct PoolAiMessage {
   std::string scope, wire;
   std::chrono::steady_clock::time_point received_at;
+  std::string method;
+  std::optional<std::uint64_t> request_id;
 };
 
 struct VerifiedPoolShare {
@@ -246,6 +248,9 @@ public:
   void qualify_pool_ai(); // called only after native traced replay self-test
   std::optional<PoolAiMessage> take_pool_ai();
   bool submit_pool_ai_result(std::string_view scope,std::string_view result);
+  // Declines a mining.ai_request this worker will not answer with error 46 (busy), so the pool
+  // re-dispatches it at once instead of waiting for a timeout. Openings are never declined.
+  bool decline_pool_ai(const PoolAiMessage &message);
 
   std::size_t endpoint_count() const noexcept { return endpoints_.size(); }
   std::size_t active_endpoint_index() const noexcept { return active_endpoint_index_; }

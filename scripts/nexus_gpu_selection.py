@@ -1,6 +1,6 @@
 """Persistent GPU selection for PoM and inference, with guarded worker handoff."""
 import argparse
-import fcntl
+import nexus_file_lock as fcntl
 import json
 import os
 from pathlib import Path

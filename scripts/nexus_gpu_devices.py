@@ -7,7 +7,7 @@ the AMD-only read-only native tool; ordinary UI polling never initializes it.
 """
 import argparse
 from contextlib import contextmanager
-import fcntl
+import nexus_file_lock as fcntl
 import hashlib
 import json
 import os

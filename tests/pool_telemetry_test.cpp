@@ -78,6 +78,16 @@ int main(){try{
  reply(c,id(frames[0]),"\"result\":null,\"error\":[20,\"synthetic AI rejection\",null]");
  check(c.telemetry_snapshot().rejected_shares==0,"AI rejection counted as rejected share");
  check(!c.submit_pool_ai_result("another-pool","{\"method\":\"mining.ai_response\",\"params\":[]}"),"AI result crossed pool scope");
+ check(!c.decline_pool_ai(*task),"AI request without an ID declined");check(c.take_outbound_wire_log().empty(),"uncorrelated decline sent");
+ check(c.process_inbound_line("{\"id\":77,\"method\":\"mining.ai_request\",\"params\":[]}"),"identified AI request unhandled");
+ auto unserved=c.take_pool_ai();check(unserved&&unserved->request_id==77u&&unserved->method=="mining.ai_request","AI request ID not retained");
+ auto moved=*unserved;moved.scope="another-pool";check(!c.decline_pool_ai(moved),"AI decline crossed pool scope");
+ check(c.decline_pool_ai(*unserved),"unserved AI request not declined");frames=c.take_outbound_wire_log();
+ {auto o=parse(frames.at(0));const auto &e=o.fields().at("error").list_value();
+  check(frames.size()==1&&id(frames[0])==77&&e.values(0).number_value()==46,"unserved AI request not declined as busy");}
+ check(c.process_inbound_line("{\"id\":78,\"method\":\"mining.ai_opening\",\"params\":[]}"),"identified opening unhandled");
+ auto opening=c.take_pool_ai();check(opening&&!c.decline_pool_ai(*opening)&&c.take_outbound_wire_log().empty(),"audit opening declined as busy");
+ check(c.telemetry_snapshot().rejected_shares==0,"AI decline counted as rejected share");
  auto json=pool_metrics_json(cfg.pool_telemetry,0,{},std::numeric_limits<std::uint64_t>::max(),0,0,false);
  check(json.find("18446744073709551615")!=std::string::npos,"u64 receipt count rounded through double");
  auto invalid=cfg.pool_telemetry;invalid.devices.push_back(invalid.devices[0]);bool denied=false;

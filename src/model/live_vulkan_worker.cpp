@@ -1,4 +1,5 @@
 #include "keryx/nexus/developer_config.hpp"
+#include "keryx/nexus/platform/vulkan_device_binding.hpp"
 #include "keryx/nexus/gguf_reader.hpp"
 #include "keryx/nexus/opoi.hpp"
 #include "keryx/nexus/grpc_client.hpp"
@@ -8,6 +9,7 @@
 #include "keryx/nexus/ai_service.hpp"
 #include "keryx/nexus/ai_response_service.hpp"
 #include "keryx/nexus/h15_audit_client.hpp"
+#include "keryx/nexus/pool_ai_service.hpp"
 #include "keryx/nexus/escrow_watcher.hpp"
 #include "keryx/nexus/native_telemetry.hpp"
 #include "keryx/nexus/startup_readiness.hpp"
@@ -78,6 +80,32 @@ constexpr std::array<std::uint8_t, 32> SEED_H14_TAG = {
 std::uint64_t monotonic_ns() {
   return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
       std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+
+bool is_polaris_device(std::string_view device_id) {
+#ifndef _WIN32
+  try {
+    std::string pci_str{device_id};
+    if (pci_str.rfind("pci:", 0) == 0) pci_str = pci_str.substr(4);
+    const auto dev_file = fs::path("/sys/bus/pci/devices") / pci_str / "device";
+    if (fs::exists(dev_file)) {
+      std::ifstream f(dev_file);
+      std::string id_str;
+      if (f >> id_str) {
+        if (id_str == "0x67df" || id_str == "0x67ef" || id_str == "0x67ff" ||
+            id_str == "0x67c0" || id_str == "0x67c1" || id_str == "0x67c2" ||
+            id_str == "0x67c4" || id_str == "0x67c7" || id_str == "0x67e0" ||
+            id_str == "0x67e1" || id_str == "0x67e3" || id_str == "0x67e8" ||
+            id_str == "0x67eb" || id_str == "0x6980" || id_str == "0x6981" ||
+            id_str == "0x6985" || id_str == "0x6986" || id_str == "0x6987" ||
+            id_str == "0x6995" || id_str == "0x699f" || id_str == "0x6fdf") {
+          return true;
+        }
+      }
+    }
+  } catch (...) {}
+#endif
+  return false;
 }
 
 std::atomic_bool process_stop{false};
@@ -261,18 +289,22 @@ int main(int argc, char **argv) {
   // Canonical Vulkan environment defaults
   #ifdef _WIN32
   const char *home_env = std::getenv("HOME");
+  if (!home_env) home_env = std::getenv("USERPROFILE");
   fs::path home_path = home_env ? fs::path(home_env) : fs::current_path();
-  fs::path default_data_dir = home_path / "Scaricati" / "KERYX-NEXUS-RECOVERY";
+  const char *local_app_data = std::getenv("LOCALAPPDATA");
+  fs::path default_data_dir = local_app_data ? fs::path(local_app_data) / "nexus-keryx-miner"
+                                             : home_path / "nexus-keryx-miner";
 
   _putenv_s("NEXUS_AI_BACKEND", "vulkan");
-  _putenv_s("KERYX_LLAMA_CTX", "512");
+  if (!std::getenv("NEXUS_DATA_DIR")) {
+    _putenv_s("NEXUS_DATA_DIR", default_data_dir.string().c_str());
+  }
   #else
   const char *home_env = std::getenv("HOME");
   fs::path home_path = home_env ? fs::path(home_env) : fs::current_path();
   fs::path default_data_dir = home_path / "Scaricati" / "KERYX-NEXUS-RECOVERY";
 
   setenv("NEXUS_AI_BACKEND", "vulkan", 1);
-  setenv("KERYX_LLAMA_CTX", "512", 1);
   if (!std::getenv("NEXUS_DATA_DIR")) {
     setenv("NEXUS_DATA_DIR", default_data_dir.string().c_str(), 1);
   }
@@ -294,7 +326,11 @@ int main(int argc, char **argv) {
   std::string meta_path;
   std::string oracle_path;
   std::string runtime_dir = "/tmp/nexus-vulkan-worker";
-  std::string vulkan_lib = (default_data_dir / "artifacts" / "inference" / "vk" / "libkeryx-llama-vk.so").string();
+#ifdef _WIN32
+  std::string vulkan_lib = (developer_data_root() / "artifacts" / "inference" / "vk" / "keryx-llama-vk.dll").string();
+#else
+  std::string vulkan_lib = (developer_data_root() / "artifacts" / "inference" / "vk" / "libkeryx-llama-vk.so").string();
+#endif
   std::string ipfs_endpoint = "http://127.0.0.1:5001";
   std::string device_id = "0000:00:02.0";
   std::string escrow_key_file;
@@ -347,6 +383,7 @@ int main(int argc, char **argv) {
     else if (arg == "--meta") { if (i + 1 < argc) meta_path = argv[++i]; }
     else if (arg == "--device" || arg == "--gpu") { if (i + 1 < argc) device_id = argv[++i]; }
     else if (arg == "--vulkan-lib") { if (i + 1 < argc) vulkan_lib = argv[++i]; }
+    else if (arg == "--oracle") { if (i + 1 < argc) oracle_path = argv[++i]; }
     else if (arg == "--ipfs-endpoint" || arg == "--ipfs-api") { if (i + 1 < argc) ipfs_endpoint = argv[++i]; }
     else if (arg == "--escrow-key-file" || arg == "--escrow-key") { if (i + 1 < argc) escrow_key_file = argv[++i]; }
     else if (arg == "--escrow-cert") { if (i + 1 < argc) escrow_cert_hex = argv[++i]; }
@@ -373,6 +410,16 @@ int main(int argc, char **argv) {
     } catch (...) {}
   }
 
+  // OPoI challenges fit a 512-token context; traced AI answers need the official prompt budget.
+  if (!std::getenv("KERYX_LLAMA_CTX")) {
+    const char *context = ai_responses_enabled ? "8192" : "512";
+#ifdef _WIN32
+    _putenv_s("KERYX_LLAMA_CTX", context);
+#else
+    setenv("KERYX_LLAMA_CTX", context, 1);
+#endif
+  }
+
   // Resolve model paths
   if (model_path.empty()) {
     if (fs::exists(fs::path(models_dir) / "Qwen3.5-9B-abliterated" / "model.gguf")) {
@@ -383,6 +430,13 @@ int main(int argc, char **argv) {
       model_path = (fs::path(models_dir) / "model.gguf").string();
       tree_path = (fs::path(models_dir) / "pom-tree.bin").string();
       meta_path = (fs::path(models_dir) / "pom-tree.json").string();
+    }
+  }
+
+  if (oracle_path.empty()) {
+    const auto cand = developer_data_root() / "artifacts/oracle/34b4cb376175106bad4d8d6b6fdf270c75c799f5b6057e50cdb27614c9265482/nexus-m21-oracle";
+    if (fs::exists(cand)) {
+      oracle_path = cand.string();
     }
   }
 
@@ -408,6 +462,11 @@ int main(int argc, char **argv) {
             << " proof_threads=" << proof_threads << "\n" << std::flush;
 
   startup.record("CONFIG_VALIDATION", StartupResult::Pass, "Device, model, and network parameters validated");
+
+  const bool is_polaris = is_polaris_device(device_id);
+  if (is_polaris) {
+    std::cout << "DEVICE_ARCHITECTURE=POLARIS device=" << device_id << " wave=64 lds_kb=4.1 batch_opt=" << batch_size << "\n" << std::flush;
+  }
 
   NativePomTelemetry telemetry(monotonic_ns());
   telemetry.set_pom_backend("vulkan-jit");
@@ -456,15 +515,27 @@ int main(int argc, char **argv) {
   }
 
   // Verify GGUF model and Merkle index
-  model::ReadOnlyGguf gguf(model_path);
-  model::SparseMerkleIndex merkle(gguf, tree_path);
-  const auto anchor = official_tier_anchor(140115000ULL, 0);
-  gguf.verify_sidecar(tree_path, meta_path, official_model, anchor.root, anchor.chunks);
+  std::unique_ptr<model::ReadOnlyGguf> gguf_owner;
+  std::unique_ptr<model::SparseMerkleIndex> merkle_owner;
+  try {
+    gguf_owner = std::make_unique<model::ReadOnlyGguf>(model_path);
+    merkle_owner = std::make_unique<model::SparseMerkleIndex>(*gguf_owner, tree_path);
+    const auto anchor = official_tier_anchor(140115000ULL, 0);
+    gguf_owner->verify_sidecar(tree_path, meta_path, official_model, anchor.root, anchor.chunks);
+  } catch (const std::exception &e) {
+    startup.record("MODEL_VERIFIED", StartupResult::Blocked, std::string("Model verification failed: ") + e.what());
+    return 78;
+  }
+  auto &gguf = *gguf_owner;
+  auto &merkle = *merkle_owner;
   startup.record("MODEL_VERIFIED", StartupResult::Pass, "GGUF model and Merkle sidecar verified");
 
   // Load single resident Vulkan runtime for zero-dup PoM + H15 inference
+  std::unique_ptr<platform::VulkanDeviceBinding> device_binding;
   std::unique_ptr<opoi::StockLlamaRuntime> shared_runtime;
   try {
+    device_binding = std::make_unique<platform::VulkanDeviceBinding>(vulkan_lib, device_id, developer_data_root());
+    std::cout << "VULKAN_DEVICE_BOUND uuid=" << device_binding->uuid() << "\n" << std::flush;
     shared_runtime = std::make_unique<opoi::StockLlamaRuntime>(vulkan_lib, model_path);
     if (!shared_runtime->pom_ready()) {
       throw std::runtime_error("Resident Vulkan model failed pom_ready check");
@@ -706,6 +777,8 @@ int main(int argc, char **argv) {
     if (const char *ca = std::getenv("NEXUS_POOL_CA_FILE"); ca && *ca) scfg.tls_ca_file = ca;
     scfg.submission_journal=developer_data_root()/"state"/"submissions"/"pool-shares.journal";
     scfg.user_agent = stratum::nexus_pool_agent;
+    // PoM v5 pads follow the H16 table (consensus/pom_v5.cpp), as in the CUDA worker.
+    scfg.h16_protocol_compatible = true;
     const auto disabled=[](const char *name){const char *v=std::getenv(name);return v&&(std::string_view(v)=="1"||std::string_view(v)=="true");};
     scfg.pool_telemetry.enabled=!disabled("NEXUS_POOL_TELEMETRY_DISABLE")&&!disabled("KERYX_TELEMETRY_DISABLE");
     scfg.pool_telemetry.build="vulkan";
@@ -719,6 +792,61 @@ int main(int argc, char **argv) {
     gpu_ownership.set_busy_callback([client = stratum_client.get()](bool busy) {
       if (client) client->set_ai_inference_busy(busy);
     });
+  }
+
+  // Traced pool AI, as in the CUDA worker: the pool is told of a trace-capable model only after a
+  // native traced self-test whose pieces the Rust verifier accepts.
+  std::unique_ptr<ai::H15AuditClient> pool_h15;
+  std::unique_ptr<ai::PoolAiService> pool_ai;
+  if (pool_mode && stratum_client && ai_responses_enabled) {
+    try {
+      if (shared_runtime->abi_version() != 9 || !shared_runtime->supports_length_aware_tracing())
+        throw std::runtime_error("the Vulkan runtime does not export length-aware ABI9 tracing");
+      // Offline pool captures make no node RPC, but the client requires a loopback node endpoint.
+      // In pool mode `endpoint` is the pool, so pass the node default the CUDA worker uses.
+      pool_h15 = std::make_unique<ai::H15AuditClient>(*shared_runtime, gguf, merkle,
+          developer_data_root() / "state" / "pool-ai" / device_binding->uuid() / "engine", escrow_secret, "grpc://127.0.0.1:22110",
+          official_model, true);
+      pool_h15->set_gpu_owner([&](const std::function<void()> &work) {
+        gpu_ownership.run_opoi([&] { shared_runtime->pom_release_pad(); }, [&] { work(); return true; }, [] {});
+      });
+      Hash self_request{};
+      self_request.fill(0x5a);
+      constexpr char self_prompt[] = "Nexus pool check\0Reply OK.";
+      gpu_ownership.run_opoi([&] { shared_runtime->pom_release_pad(); }, [&] {
+        (void)pool_h15->infer(std::string_view(self_prompt, sizeof(self_prompt) - 1), 16, self_request);
+        return true;
+      }, [] {});
+      const auto checked = pool_h15->verify_capture(2);
+      if (!checked[0]) throw std::runtime_error("the traced self-test had no verified pieces");
+      pool_ai = std::make_unique<ai::PoolAiService>(developer_data_root() / "state" / "pool-ai" / device_binding->uuid() / "records", official_model,
+          [&](std::string_view prompt, std::uint32_t tokens, const Hash &request) {
+            telemetry.set_state("PAUSED", "RUNNING", "POOL_AI_TRACE", submit_enabled ? "ARMED" : "DISABLED");
+            return gpu_ownership.run_opoi([&] { shared_runtime->pom_release_pad(); }, [&] {
+              ai::PoolAiService::Capture result;
+              result.answer = pool_h15->infer(prompt, tokens, request);
+              result.record = pool_h15->export_pool_capture();
+              return result;
+            }, [] {});
+          },
+          [&](auto capture, const Hash &request, const Hash &response, const Hash &seed, auto path, auto previous) {
+            telemetry.set_state("PAUSED", "RUNNING", "POOL_AI_OPENING", submit_enabled ? "ARMED" : "DISABLED");
+            return pool_h15->open_pool_capture(capture, request, response, seed, path, previous);
+          });
+      stratum_client->qualify_pool_ai();
+      std::cout << "POOL_AI_ROUTE=QUALIFIED native=true backend=vulkan verified_seeds=2 durable_capture_before_send=true\n"
+                << std::flush;
+    } catch (const std::exception &e) {
+      if (is_polaris) {
+        std::cout << "POOL_AI_ROUTE=UNQUALIFIED detail=\"" << e.what() << "\" action=POM_ONLY\n" << std::flush;
+        pool_h15.reset();
+        pool_ai.reset();
+        ai_responses_enabled = false;
+      } else {
+        std::cerr << "POOL_AI_ROUTE=UNQUALIFIED detail=\"" << e.what() << "\"\n" << std::flush;
+        return 78;
+      }
+    }
   }
 
   // Queues
@@ -1108,6 +1236,21 @@ int main(int argc, char **argv) {
         telemetry.set_gpu_activity("WAITING_TEMPLATE");
         continue;
       }
+      if (pool_ai) {
+        if (auto message = stratum_client->take_pool_ai()) {
+          try {
+            auto result = pool_ai->handle(message->scope, pool_worker, message->wire);
+            const bool sent = stratum_client->submit_pool_ai_result(message->scope, result);
+            std::cout << "POOL_AI_RESULT sent=" << (sent ? "true" : "false") << " scope_bound=true\n" << std::flush;
+          } catch (const std::exception &e) {
+            const bool declined = stratum_client->decline_pool_ai(*message);
+            std::cout << "POOL_AI_REQUEST_FAILED scope_bound=true empty_response_sent=false declined="
+                      << (declined ? "true" : "false") << " detail=\"" << e.what() << "\"\n" << std::flush;
+          }
+          telemetry.set_state("ACTIVE", "IDLE", "", submit_enabled ? "ARMED" : "DISABLED");
+          continue;
+        }
+      }
 
       const auto wait_start_ns = monotonic_ns();
       auto maybe_pool_job = stratum_client->current_job();
@@ -1192,7 +1335,8 @@ int main(int argc, char **argv) {
       const auto pad_words = v5 ? v5_pad_seed_words(pad.seed) : std::array<std::uint64_t, 4>{};
       const std::uint32_t preferred_v5 = shared_runtime->pom_v5_batch();
       const std::uint32_t requested_batch = (v5 && shared_runtime->pom_v5_ready())
-          ? std::min<std::uint32_t>(batch_size, preferred_v5 ? preferred_v5 : 8192u)
+          ? (is_polaris ? std::min<std::uint32_t>(batch_size, 16384u)
+                        : std::min<std::uint32_t>(batch_size, preferred_v5 ? preferred_v5 : 8192u))
           : batch_size;
       const std::uint64_t batch_start=nonce_cursor;
       const auto dispatch_batch=static_cast<std::uint32_t>(pool_nonce_exhausted?0:bounded_nonce_batch(
@@ -1294,6 +1438,9 @@ int main(int argc, char **argv) {
               const auto sub_id = stratum_client->submit_share(share);
               telemetry.set_state("ACTIVE", "IDLE", "", sub_id ? "SUBMIT_SENT" : "STALE");
             }
+          } else {
+            // The host re-walk is authoritative; a GPU winner it rejects is a runtime fault.
+            std::cerr << "AMD_POOL_HOST_REWALK_REJECTED nonce=" << winning_nonce << "\n" << std::flush;
           }
         } catch (const std::exception &e) {
           std::cerr << "AMD_POOL_PROOF_BUILD_ERROR: " << e.what() << "\n" << std::flush;
@@ -1372,7 +1519,8 @@ int main(int argc, char **argv) {
     const auto pad_words = v5 ? v5_pad_seed_words(pad.seed) : std::array<std::uint64_t, 4>{};
     const std::uint32_t preferred_v5 = shared_runtime->pom_v5_batch();
     const std::uint32_t requested_batch = (v5 && shared_runtime->pom_v5_ready())
-        ? std::min<std::uint32_t>(batch_size, preferred_v5 ? preferred_v5 : 8192u)
+        ? (is_polaris ? std::min<std::uint32_t>(batch_size, 16384u)
+                      : std::min<std::uint32_t>(batch_size, preferred_v5 ? preferred_v5 : 8192u))
         : batch_size;
 
     const auto batch_start=nonce_cursor;
@@ -1519,6 +1667,9 @@ int main(int argc, char **argv) {
           } else {
             std::cout << "AMD_WINNER_VERIFIED nonce=" << winning_nonce << " submit=DISABLED\n" << std::flush;
           }
+        } else {
+          // The host re-walk is authoritative; a GPU winner it rejects is a runtime fault.
+          std::cerr << "AMD_HOST_REWALK_REJECTED nonce=" << winning_nonce << "\n" << std::flush;
         }
       } catch (const std::exception &e) {
         std::cerr << "AMD_PROOF_BUILD_ERROR: " << e.what() << "\n" << std::flush;

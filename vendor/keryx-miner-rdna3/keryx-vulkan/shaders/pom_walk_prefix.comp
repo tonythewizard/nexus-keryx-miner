@@ -1,0 +1,121 @@
+#version 460
+// Keryx Proof-of-Model walk — ZERO-DUP variant: walks the inference engine's own resident
+// weight tensors (ggml-vulkan buffers) instead of a miner-owned packed blob. Folds are
+// BYTE-IDENTICAL to pom_walk.comp / src/pom.rs / the node verifier; only chunk ADDRESSING
+// differs. ggml suballocates many tensors at arbitrary offsets inside a few big buffers, so
+// the canonical chunk index maps to (tensor, offset) via a per-tensor cumulative-chunk prefix
+// table + binary search (same design as the Metal fork's bindless kernel), not shard shift/mask.
+//
+// Table layout (canonical name-sorted tensor order, tensors with <32 B skipped):
+//   PREFIX.start[i] = first canonical chunk of tensor i   (start[0] = 0,
+//                     start[n_tensors] = n_chunks — one sentinel entry at the end)
+//   ADDRS.addr[i]   = GPU virtual address of tensor i's first byte (bufferDeviceAddress)
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_EXT_buffer_reference : require
+
+layout(local_size_x = 64) in; // RDNA3 wavefront width
+
+// A 32-byte canonical chunk, reached by raw GPU pointer into a ggml weight buffer.
+layout(std430, buffer_reference, buffer_reference_align = 8) readonly buffer Chunk {
+    uint64_t words[];
+};
+
+// Dispatch I/O block — see the matching comment in pom_walk.comp: the 256-bit LE target lives here
+// rather than in the push constants so the block stays within the 128 B guaranteed
+// `maxPushConstantsSize` after H5/H5.1 added s0..s3 + walk_v2.
+layout(std430, binding = 0) buffer Io {
+    uint offset;
+    uint _pad;
+    uint64_t t[4];
+} OUT;
+layout(std430, binding = 1) readonly buffer Prefix { uint64_t start[]; } PREFIX; // n_tensors + 1
+layout(std430, binding = 2) readonly buffer Addrs  { uint64_t addr[];  } ADDRS;  // n_tensors
+
+layout(push_constant) uniform Push {
+    uint64_t p0, p1, p2, p3;   // POW-fold pph words (H3-salted at/after the H3 gate)
+    uint64_t s0, s1, s2, s3;   // SEED-fold pph words (H5.1-salted at/after the H5.1 gate)
+    uint64_t timestamp;        // header timestamp
+    uint64_t n_chunks;         // total canonical chunks
+    uint64_t start_nonce;      // first nonce of this batch
+    uint k;                    // POM_WALK_STEPS (256)
+    uint batch;                // number of nonces in this dispatch
+    uint n_tensors;            // number of table entries
+    uint walk_v2;              // H5: 1 = mix64-chained transition, 0 = frozen v1 XOR fold
+} pc;                          // 104 B total (11 u64 + 4 u32)
+
+uint64_t mix64(uint64_t x) {
+    x ^= x >> 30;
+    x *= 0xbf58476d1ce4e5b9UL;
+    x ^= x >> 27;
+    x *= 0x94d049bb133111ebUL;
+    x ^= x >> 31;
+    return x;
+}
+
+// Largest i with PREFIX.start[i] <= off (upper_bound - 1). ~9 iterations for an 8B model's
+// ~300 tensors; the prefix table is a few KiB and stays cache-resident.
+uint find_tensor(uint64_t off) {
+    uint lo = 0u;
+    uint hi = pc.n_tensors; // invariant: start[lo] <= off < start[hi]
+    while (hi - lo > 1u) {
+        uint mid = (lo + hi) / 2u;
+        if (PREFIX.start[mid] <= off) { lo = mid; } else { hi = mid; }
+    }
+    return lo;
+}
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= pc.batch) {
+        return;
+    }
+    uint64_t nonce = pc.start_nonce + uint64_t(idx);
+
+    // Seed fold reads the SEED word set (H5.1-swapped); the pow fold below keeps p0..p3.
+    uint64_t state = mix64(nonce ^ 0x4B65727978531UL);
+    state = mix64(state ^ pc.timestamp);
+    state = mix64(state ^ pc.s0);
+    state = mix64(state ^ pc.s1);
+    state = mix64(state ^ pc.s2);
+    state = mix64(state ^ pc.s3);
+
+    uint64_t off = state % pc.n_chunks;
+    for (uint i = 0u; i < pc.k; ++i) {
+        uint t = find_tensor(off);
+        uint64_t local = off - PREFIX.start[t];
+        Chunk chunk = Chunk(ADDRS.addr[t] + local * 32UL); // 32 bytes per canonical chunk
+        uint64_t h = state;
+        if (pc.walk_v2 != 0u) {
+            // H5 non-foldable walk — all 32 bytes load-bearing. Dispatch-uniform, no divergence.
+            h = mix64(h ^ chunk.words[0]);
+            h = mix64(h ^ chunk.words[1]);
+            h = mix64(h ^ chunk.words[2]);
+            h = mix64(h ^ chunk.words[3]);
+            state = h;
+        } else {
+            // Pre-H5 fold (frozen — validates all blocks below h5_activation_daa()).
+            h ^= chunk.words[0];
+            h ^= chunk.words[1];
+            h ^= chunk.words[2];
+            h ^= chunk.words[3];
+            state = mix64(h);
+        }
+        off = state % pc.n_chunks;
+    }
+
+    uint64_t o0 = mix64(state ^ pc.p0 ^ 0x9E3779B97F4A7C15UL);
+    uint64_t o1 = mix64(o0 ^ pc.p1 ^ 0xC2B2AE3D27D4EB4FUL);
+    uint64_t o2 = mix64(o1 ^ pc.p2 ^ 0x165667B19E3779F9UL);
+    uint64_t o3 = mix64(o2 ^ pc.p3 ^ 0xD6E8FEB86659FD93UL);
+
+    bool le;
+    if (o3 != OUT.t[3]) { le = o3 < OUT.t[3]; }
+    else if (o2 != OUT.t[2]) { le = o2 < OUT.t[2]; }
+    else if (o1 != OUT.t[1]) { le = o1 < OUT.t[1]; }
+    else if (o0 != OUT.t[0]) { le = o0 < OUT.t[0]; }
+    else { le = true; }
+
+    if (le) {
+        atomicMin(OUT.offset, idx);
+    }
+}

@@ -80,6 +80,9 @@ answer and openings. Nexus never needs the pool's key and sends no on-chain
 transaction on this path. The adapter serves the H15 traced contract; it does not
 implement the optional Supr cross-rig `KRXREC01` custody/import extension or
 legacy untraced pool chat. Those are not advertised as supported features.
+A `mining.ai_request` the route does not serve, such as untraced chat, is
+declined with error 46 (busy), so the pool re-dispatches it instead of waiting
+for a timeout. Openings are never declined.
 
 Local qualification covers an actual worker, model and GPU against an isolated
 pool simulator, including worker restart, nodeless operation, same-operator aliases and subsequent opening. It is not an

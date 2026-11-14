@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Loopback agent API. Scoped bearer keys, bounded diagnostics and isolated development."""
 import argparse
-import fcntl
+import nexus_file_lock as fcntl
 import hashlib
 import hmac
 import json

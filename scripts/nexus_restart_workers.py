@@ -170,7 +170,6 @@ def restart():
         owned_stop=initial_stop
     if native_workers():
         subprocess.run(['/usr/bin/pkill', '-9', '-u', str(os.getuid()), '-f', 'nexus-live-cuda-worker'], capture_output=True)
-        subprocess.run(['/usr/bin/pkill', '-9', '-u', str(os.getuid()), '-f', 'keryx-miner-rdna3'], capture_output=True)
         subprocess.run(['/usr/bin/pkill', '-9', '-u', str(os.getuid()), '-f', 'nexus-vulkan-rdna3-worker'], capture_output=True)
         time.sleep(0.3)
         if native_workers():

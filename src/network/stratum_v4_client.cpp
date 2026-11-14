@@ -918,6 +918,13 @@ bool StratumV4Client::submit_pool_ai_result(std::string_view scope,std::string_v
   return true;
 }
 
+bool StratumV4Client::decline_pool_ai(const PoolAiMessage &message) {
+  std::lock_guard lock(mutex_);
+  if(message.method!="mining.ai_request"||!message.request_id||message.scope!=endpoint_.raw_url||!authorized_||!subscribed_)return false;
+  return send_line_locked("{\"id\":"+std::to_string(*message.request_id)+
+      ",\"result\":null,\"error\":[46,\"busy: Nexus did not serve this request\",null]}");
+}
+
 bool StratumV4Client::connect_and_handshake_once() {
   TlsSignalGuard signals;
   std::unique_lock lock(mutex_);
@@ -1649,7 +1656,9 @@ bool StratumV4Client::process_inbound_line(std::string_view line) {
         if(config_.pool_telemetry.trace_ready&&authorized_&&subscribed_&&
             method!="mining.ai_draw"&&(method=="mining.ai_opening"||pool_mining_available_)&&pool_ai_queue_.size()<8&&
             (method=="mining.ai_opening"||!ai_inference_busy_.load(std::memory_order_acquire))) {
-          pool_ai_queue_.push_back({endpoint_.raw_url,exact_json,std::chrono::steady_clock::now()});
+          std::optional<std::uint64_t> request_id;
+          if(const auto id_it=fields.find("id");id_it!=fields.end())request_id=value_to_u64(id_it->second);
+          pool_ai_queue_.push_back({endpoint_.raw_url,exact_json,std::chrono::steady_clock::now(),method,request_id});
           return true;
         }
       }

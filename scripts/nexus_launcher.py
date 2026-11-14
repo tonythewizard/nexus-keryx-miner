@@ -25,6 +25,8 @@ def find_executable(base_dir: Path, name: str) -> Path:
         base_dir / "build" / "bin" / "Release" / exe_name,
         base_dir / "build" / "linux" / "bin" / exe_name,
         base_dir / "build" / "windows-worker" / "bin" / "Release" / exe_name,
+        base_dir / "build" / "windows-worker" / "bin" / exe_name,
+        base_dir / "oracle-rust" / "target" / "release" / exe_name,
         base_dir.parent / "KERYX-NEXUS-RECOVERY" / "artifacts" / "native-worker" / "nexus-live-cuda-worker",
         base_dir.parent / "KERYX-NEXUS-RECOVERY" / "artifacts" / "vulkan-native" / "nexus-live-vulkan-worker",
     ]
@@ -56,6 +58,15 @@ def parse_args():
     parser.add_argument("--pool-url", type=str, default="", help="Stratum pool URL (optional, e.g. stratum+tcp://pool.keryx.net:4444)")
     parser.add_argument("--pool-worker", type=str, default="", help="Stratum worker name (optional, defaults to address)")
     parser.add_argument("--pool-password", type=str, default="x", help="Stratum pool password (e.g. d=4 for fixed difficulty, default: x)")
+    parser.add_argument("--vulkan-device", default="", help="Explicit AMD GPU UUID or pci:dddd:bb:ss.f identity")
+    parser.add_argument("--vulkan-lib", type=str, default="",
+                        help="Vulkan runtime library (default: keryx-llama-vk next to the Vulkan worker)")
+    parser.add_argument("--oracle", type=str, default="",
+                        help="Independent Rust verifier (default: nexus-m21-oracle from the build)")
+    parser.add_argument("--live", action="store_true",
+                        help="Authorize the Vulkan worker to submit shares/blocks (verified by --oracle first)")
+    parser.add_argument("--enable-ai-response", action="store_true",
+                        help="Let the Vulkan worker serve the pool's traced AI (H15) requests")
     return parser.parse_args()
 
 
@@ -68,10 +79,8 @@ def detect_available_gpus():
             res = subprocess.run(["wmic", "path", "win32_VideoController", "get", "name"],
                                  capture_output=True, text=True, timeout=5)
             out = res.stdout.lower()
-            if "nvidia" or "geforce" or "rtx" in out:
-                has_nvidia = True
-            if "amd" or "radeon" in out:
-                has_amd = True
+            has_nvidia = any(name in out for name in ("nvidia", "geforce", "rtx"))
+            has_amd = any(name in out for name in ("amd", "radeon"))
         except Exception:
             has_nvidia = True
     else:
@@ -165,6 +174,8 @@ def main():
     # 2. AMD / Vulkan Worker
     if target_gpus in ("amd", "dual"):
         try:
+            if not args.vulkan_device:
+                raise ValueError("--vulkan-device must name the AMD GPU UUID or PCI identity")
             vk_bin = find_executable(root_dir, "nexus-live-vulkan-worker")
             vk_env = env.copy()
             vk_env["NEXUS_VULKAN_BATCH_SIZE"] = str(args.vulkan_batch)
@@ -177,20 +188,29 @@ def main():
                 vk_env["VK_LOADER_LAYERS_DISABLE"] = "~implicit~"
 
             node_url = args.pool_url if args.pool_url else f"grpc://{args.keryxd_address}:{args.port}"
+            runtime_name = "keryx-llama-vk.dll" if IS_WINDOWS else "libkeryx-llama-vk.so"
+            vulkan_lib = Path(args.vulkan_lib) if args.vulkan_lib else vk_bin.parent / runtime_name
             cmd = [
                 str(vk_bin),
                 "--keryxd-address", node_url,
-                "--models", str(models_dir),
+                "--models-dir", str(models_dir),
                 "--escrow-key", str(escrow_key),
-                "--cert", args.escrow_cert,
+                "--escrow-cert", args.escrow_cert,
                 "--address", args.address,
                 "--extra-data", "NEXUS v0.0.5",
+                "--vulkan-lib", str(vulkan_lib.resolve()),
+                "--device", args.vulkan_device,
             ]
             if args.pool_url:
                 cmd.extend([
                     "--worker", args.pool_worker or args.address,
                     "--pool-password", args.pool_password,
                 ])
+            if args.live:
+                oracle = Path(args.oracle) if args.oracle else find_executable(root_dir, "nexus-m21-oracle")
+                cmd.extend(["--oracle", str(oracle.resolve()), "--enable-submit"])
+            if args.enable_ai_response:
+                cmd.append("--enable-ai-response")
             print(f"[Launcher] Launching AMD/Cross-Vendor Vulkan Worker: {vk_bin.name}")
             p_vk = subprocess.Popen(cmd, env=vk_env)
             processes.append((p_vk, "AMD Vulkan Worker"))

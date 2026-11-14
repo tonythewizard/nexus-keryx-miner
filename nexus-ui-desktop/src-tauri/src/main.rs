@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod desktop_platform;
 use serde_json::{json, Value};
 use std::{path::PathBuf, process::Stdio, time::Duration};
 use tauri::Manager;
@@ -49,19 +50,15 @@ struct Bridge {
     output: BufReader<ChildStdout>,
 }
 impl Bridge {
-    fn start() -> Result<Self, String> {
-        let source = PathBuf::from(
-            std::env::var_os("NEXUS_SOURCE_DIR").ok_or("NEXUS_SOURCE_DIR is required")?,
-        );
-        let root =
-            PathBuf::from(std::env::var_os("NEXUS_DATA_DIR").ok_or("NEXUS_DATA_DIR is required")?);
-        if !source.is_absolute() || !root.is_absolute() || !root.is_dir() {
-            return Err("Persistent source/data directories are required".into());
-        }
+    fn start(app: &tauri::AppHandle) -> Result<Self, String> {
+        let (source, root, python) = desktop_platform::paths(app)?;
         let temporary = root.join("work/tmp");
         std::fs::create_dir_all(&temporary)
             .map_err(|_| "Persistent temporary directory unavailable")?;
-        let mut child = Command::new("/usr/bin/python3")
+        let mut command = Command::new(python);
+        #[cfg(windows)]
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        let mut child = command
             .arg("-B")
             .arg(source.join("scripts/nexus_tauri_bridge.py"))
             .current_dir(source)
@@ -139,7 +136,7 @@ async fn request(app: &tauri::AppHandle, payload: Value, seconds: u64) -> Result
         .try_lock()
         .map_err(|_| "A desktop operation is already pending")?;
     if guard.is_none() {
-        *guard = Some(Bridge::start()?);
+        *guard = Some(Bridge::start(app)?);
     }
     let result = tokio::time::timeout(
         Duration::from_secs(seconds),
@@ -258,21 +255,7 @@ async fn perform_action(
     // Secrets stay on the native pipe and in the OS clipboard, never in JavaScript.
     if let Some(content) = result.remove("clipboard") {
         let text = content.as_str().ok_or("Invalid clipboard result")?;
-        let connection = zbus::Connection::session()
-            .await
-            .map_err(|_| "Clipboard unavailable: check KDE Klipper")?;
-        let proxy = zbus::Proxy::new(
-            &connection,
-            "org.kde.klipper",
-            "/klipper",
-            "org.kde.klipper.klipper",
-        )
-        .await
-        .map_err(|_| "Clipboard unavailable: check KDE Klipper")?;
-        let _: () = proxy
-            .call("setClipboardContents", &(text,))
-            .await
-            .map_err(|_| "Clipboard unavailable: check KDE Klipper")?;
+        desktop_platform::clipboard(&app, text.to_owned()).await?;
     }
     let result = Value::Object(result.clone());
     if action == "shutdown" {
@@ -326,6 +309,7 @@ fn show(app: &tauri::AppHandle) {
         let _ = w.set_focus();
         // KWin may retain skipTaskbar/minimized state after a Wayland restore.
         // The helper is PID/starttime checked and has no worker commands.
+        #[cfg(target_os = "linux")]
         if let Some(source) = std::env::var_os("NEXUS_SOURCE_DIR") {
             let _ = std::process::Command::new("/usr/bin/python3")
                 .arg("-B")
@@ -354,19 +338,15 @@ fn window_action(app: tauri::AppHandle, action: String) -> Result<(), String> {
             .eval("location.reload()")
             .map_err(|_| "Window unavailable".into()),
         "open_api" => {
-            std::process::Command::new("/usr/bin/xdg-open")
-                .arg("http://127.0.0.1:3340/")
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-                .map_err(|_| "Browser unavailable")?;
+            desktop_platform::open_api()?;
             Ok(())
         }
         _ => Err("Unsupported window action".into()),
     }
 }
+#[cfg(target_os = "linux")]
 struct DesktopControl(tauri::AppHandle);
+#[cfg(target_os = "linux")]
 #[zbus::interface(name = "org.keryx.Nexus.Desktop.Control")]
 impl DesktopControl {
     #[zbus(name = "showWindow")]
@@ -459,16 +439,17 @@ fn main() {
             {
             let show_item = MenuItem::with_id(app, "show", "Show dashboard", true, None::<&str>)?;
             let minimize = MenuItem::with_id(app, "minimize", "Minimize to tray", true, None::<&str>)?;
-            let notifications = CheckMenuItem::with_id(app, "notifications", "Notifications", true, true, None::<&str>)?;
-            let restart = MenuItem::with_id(app, "restart", "Force restart", true, None::<&str>)?;
-            let shutdown = MenuItem::with_id(app, "shutdown", "Force shutdown", true, None::<&str>)?;
+            let notifications = CheckMenuItem::with_id(app, "notifications", "Notifications", !cfg!(windows), !cfg!(windows), None::<&str>)?;
+            let restart = MenuItem::with_id(app, "restart", "Force restart", !cfg!(windows), None::<&str>)?;
+            let shutdown = MenuItem::with_id(app, "shutdown", "Force shutdown", !cfg!(windows), None::<&str>)?;
             let status = MenuItem::with_id(app, "status", "NEXUS · checking service", false, None::<&str>)?;
+            let quit_ui = MenuItem::with_id(app, "quit_ui", "Quit dashboard", true, None::<&str>)?;
             let separator1 = PredefinedMenuItem::separator(app)?;
             let separator2 = PredefinedMenuItem::separator(app)?;
-            let menu = Menu::with_items(app, &[&status, &separator1, &show_item, &minimize, &notifications, &separator2, &restart, &shutdown])?;
+            let menu = Menu::with_items(app, &[&status, &separator1, &show_item, &minimize, &notifications, &separator2, &restart, &shutdown, &quit_ui])?;
             // appindicator is loaded dynamically by tray-icon. Avoid its panic
             // and retain a taskbar-restorable window if the runtime is absent.
-            let indicator_available = unsafe {
+            let indicator_available = cfg!(windows) || unsafe {
                 libloading::Library::new("libayatana-appindicator3.so.1").is_ok()
                 || libloading::Library::new("libappindicator3.so.1").is_ok()
             };
@@ -477,6 +458,7 @@ fn main() {
             if let Some(icon) = app.default_window_icon() { tray = tray.icon(icon.clone()); }
             tray.on_menu_event(|app, event| {
                 let id = event.id().as_ref();
+                if id == "quit_ui" { app.exit(0); return; }
                 if id == "show" { show(app); return; }
                 if id == "minimize" { let _ = window_action(app.clone(), "minimize".into()); return; }
                 let action = match id { "notifications" => "notifications_toggle", "restart" => "restart", "shutdown" => "shutdown", _ => return }.to_owned();
@@ -493,6 +475,8 @@ fn main() {
             app.manage(notifications);
             app.manage(status);
             }
+            #[cfg(target_os = "linux")]
+            {
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let result = async {
@@ -505,6 +489,7 @@ fn main() {
                 }.await;
                 if result.is_err() { eprintln!("NEXUS local window navigation unavailable"); }
             });
+            }
             Ok(())
         })
         .on_window_event(|window, event| { if let tauri::WindowEvent::CloseRequested {api,..} = event {api.prevent_close(); if tray_available(window.app_handle()) { let _ = window.hide(); } else { let _ = window.minimize(); }} })

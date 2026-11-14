@@ -578,7 +578,7 @@ bool StockLlamaRuntime::pom_v5_ready() const {
 }
 
 std::uint32_t StockLlamaRuntime::pom_v5_batch() const {
-  if (!impl_ || !impl_->model || !impl_->pom_v5_batch) return 1024;
+  if (!impl_ || !impl_->model || !impl_->pom_v5_batch) return 0;
   const std::lock_guard lock(impl_->mutex);
   return impl_->pom_v5_batch(impl_->model);
 }

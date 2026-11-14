@@ -1,0 +1,41 @@
+{
+  "repository": "https://github.com/shmutalov/keryx-miner-rdna3",
+  "commit": "abffe6a6df0ac49f6d1a86219b35da5091ac45e3",
+  "release": "v0.3.34-rdna3",
+  "license": "MIT OR Apache-2.0 (keryx-vulkan/Cargo.toml); LICENSE files as distributed upstream",
+  "scope": "Unmodified Vulkan PoM engine (keryx-vulkan crate) and in-process llama.cpp Vulkan engine (src/llm_engine.rs), built into tools/runtime-vulkan",
+  "llama_cpp_rs": {
+    "repository": "https://github.com/shmutalov/llama-cpp-rs",
+    "rev": "92b2e1ff9d733f3ce7de119a4653042568c95190",
+    "llama_cpp_submodule": "https://github.com/shmutalov/llama.cpp"
+  },
+  "files": {
+    "keryx-vulkan/build.rs": "7d8d8800848a4243375f92279ba0b82c85ebee38d07a1ab2395ebeba01373c22",
+    "keryx-vulkan/Cargo.toml": "0b8cc42a43b14cd1955db4bcf9973f165bccb15df243813f6bd56736caddb7bb",
+    "keryx-vulkan/examples/bench_pom_walk.rs": "420087d8bb230fe38b11454318b8697267bcebe73c1757d7c2a6fab9c8874390",
+    "keryx-vulkan/shaders/khh.comp": "d27e5ca04993c507448542dc0325e29e77d6d3f913fda18c68fd0c833a965498",
+    "keryx-vulkan/shaders/pom_fetch.comp": "ee79f7162ff088a68bd68df62928835ef3b8a6d80a5ac7e5621ac9e389301ed8",
+    "keryx-vulkan/shaders/pom_seed_v4.comp": "810c8cc5b43cf59159d9f1cbba21b23ae8dfb5d3239110b1e122c83ae966ead9",
+    "keryx-vulkan/shaders/pom_v5_pad_fill.comp": "692a98d5d1b2c318ce70edada45a0dcc156e491db6c904ee2c5e7b21f3ae9a24",
+    "keryx-vulkan/shaders/pom_walk.comp": "5d25dcb1d35a39531c3d670d10be95a1a2fdfea585e7aebdc772346d49c7477d",
+    "keryx-vulkan/shaders/pom_walk_ilp4.comp": "6e941da644d5179ceab622296f3ffcfa43ac9c4c65b3367774cfbe2e795b7012",
+    "keryx-vulkan/shaders/pom_walk_magic.comp": "92258386c7d5801eb9f0daf19be840b15199dc85241834be2bec3a408fde091d",
+    "keryx-vulkan/shaders/pom_walk_prefix.comp": "d3987c126f914c85e3bef051fe9cc9042d6538532661de8614bbf448b7a5c5da",
+    "keryx-vulkan/shaders/pom_walk_v4.comp": "c6ea4384b082ca5abcaf9559586d9cc80cc7545b1cd24ff8a290cd15d68f1534",
+    "keryx-vulkan/shaders/pom_walk_vec2.comp": "8855c4a5de8b15b1b226f2fb382f7a9baf997f115e13612694a9e222b70750dd",
+    "keryx-vulkan/shaders/pom_walk_wave32.comp": "f6805846568beec18bfa0e50217307c4e6090f108fcfe50cb6e8eb1e43e3fa7d",
+    "keryx-vulkan/src/bench.rs": "88b10e593324568016a9afd4d4e01fafb16d11e64deb9118429cce194252d13e",
+    "keryx-vulkan/src/khh.rs": "09d6b42dca377b44f782b9d0df788a49b99a9829885328d270535f3333b9b205",
+    "keryx-vulkan/src/lib.rs": "effe577a394a5fd56ff3b4204a2ee7fe76667fd0bf3f73f1417a57e0536ae206",
+    "keryx-vulkan/src/pom_walk.rs": "f91532188aa3c04b5fac85835181bfbb6fea499cf32d7bc0ff59b18e34a71697",
+    "keryx-vulkan/src/pom_walk_v4.rs": "4d8bbe5395eaf48e6fb9d8c2fde0e696d93ea88d58e92b0a603e115c30059285",
+    "keryx-vulkan/tests/bda_limits.rs": "c8b993f4330d06f4a9186d47f50256329db2715e0c38f0fcbc1685d685d59117",
+    "keryx-vulkan/tests/khh.rs": "7490a81a5b56a5bf8e6e0eda918f3a1159c1db21166589067544a1fe5e3f7ff6",
+    "keryx-vulkan/tests/pom_v4_rate.rs": "d9d346a83a30212c249ec9f511cbd087139fe790baf4a7d7ba4e06cd20443d83",
+    "keryx-vulkan/tests/pom_walk.rs": "f8c5fdbeb3ee775ad710a444e59883183eda3a3eed34c307ec5ac21e5a118c77",
+    "keryx-vulkan/tests/prefix_vs_blob.rs": "76e40dbdea430388c1cdd95860566b2a34606c46dafb15e654b87032ca38f37e",
+    "LICENSE-APACHE": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+    "LICENSE-MIT": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+    "src/llm_engine.rs": "d7eb61a5e322ad73901d9537b4b1d5c5a0002ec11ac357898fae12e9a80dd2d2"
+  }
+}

@@ -33,7 +33,8 @@ See the [0.0.5 release notes](docs/release-0.0.5.md) (and previous [0.0.4 notes]
 | Architecture / Vendor | Execution Backend | Supported Hardware | Scope & Capabilities |
 | --- | --- | --- | --- |
 | **NVIDIA GeForce RTX** | CUDA Driver API (SM 8.6, 8.9, 12.0) | RTX 30 Series (Ampere), RTX 40 Series (Ada Lovelace), RTX 50 Series | Resident CUDA kernel, tensor-core solver, chaseless solver, native PoM execution, H15/H16 adaptive context |
-| **AMD Radeon** | Vulkan 1.3 / Buffer Device Address (BDA) | RX 400 / RX 500 (Polaris), RX 7000 Series (RDNA3) | Buffer Device Address (BDA) SPIR-V shader chunk walking, OPoI draw integration, isolated concurrent execution |
+| **AMD Radeon** | Vulkan runtime (`tools/runtime-vulkan`) loaded by `nexus-live-vulkan-worker` | RX 7000 (RDNA3, validated on RX 7900 XT); RDNA2/RDNA1 and RDNA4 by capability, not yet run on that hardware | PoM v5 walk over llama.cpp's resident weights (matrix cores on RDNA3/4, `v_dot4` otherwise), OPoI challenge inference, traced H15 pool AI (`--enable-ai-response`). See [Vulkan runtime](docs/vulkan-runtime.md) |
+| **AMD Radeon (research)** | Vulkan 1.3 / Buffer Device Address (BDA) | RX 400 / RX 500 (Polaris) | JIT/BDA SPIR-V walk research paths (`experiments/vulkan_jit`, `consensus/vulkan-bda`) |
 | **Host / Independent Oracle** | Rust & C++20 | Linux x86-64, Windows x64 | Independent proof verification against pinned protocol, deterministic test suite, consensus audits |
 
 ## Mining Workflows: Stratum Pool vs Solo Node
@@ -63,7 +64,7 @@ Only a completed packaging job produces a downloadable binary archive.
 | --- | --- |
 | Linux x86-64 | CLI preview built on Ubuntu 24.04; existing desktop available from source |
 | Windows x64 preview | Native CLI, NVIDIA SM 8.6, explicit local profile; no WSL requirement |
-| Windows desktop, Windows AMD/Vulkan, macOS | Not included in the preview |
+| Windows desktop, Windows AMD/Vulkan, macOS | Not included in the preview; AMD/Vulkan builds from source ([Vulkan runtime](docs/vulkan-runtime.md)) |
 
 See **[Native Windows setup and builds](docs/windows.md)** for prerequisites,
 package verification, private configuration and the exact validation limits.
@@ -217,7 +218,7 @@ Nexus builds upon, extends, and incorporates protocols, specifications, and refe
   - Stratum pool job dispatcher, share difficulty target negotiation, and failover mechanics.
   - Active hosting and testing of community mining pool infrastructure.
 - **[shmutalov](https://github.com/shmutalov) ([keryx-miner-rdna3](https://github.com/shmutalov/keryx-miner-rdna3), [keryx-wallet-extension](https://github.com/shmutalov/keryx-wallet-extension)):**
-  - AMD GPU Vulkan runtime execution path for RDNA3 and Polaris architectures.
+  - Vulkan PoM walk and in-process llama.cpp Vulkan engine, vendored in `vendor/keryx-miner-rdna3` and built into the AMD runtime (`tools/runtime-vulkan`).
   - SPIR-V shader optimizations and Buffer Device Address (BDA) memory walking for Proof-of-Model chunks.
   - Client-side wallet interaction patterns and Schnorr transaction signing references.
 - **[Keryx-Labs/keryx-miner](https://github.com/Keryx-Labs/keryx-miner) (Slash):**

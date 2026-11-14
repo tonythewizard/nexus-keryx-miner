@@ -67,11 +67,15 @@ def presentation(mirror, tab, log_filter, height=46, log_before=None):
 
 def main():
     protocol, sys.stdout = sys.stdout, sys.stderr
+    windows_monitor = None
+    if os.name == 'nt':
+        from nexus_windows_monitor import WindowsMonitor
+        windows_monitor = WindowsMonitor(Path(os.environ['NEXUS_DATA_DIR']))
     from nexus_agent_api import ROOT
     if Path(os.environ['NEXUS_DATA_DIR']).resolve(strict=True) != ROOT.resolve(strict=True):
         raise ValueError('The transitional adapter requires the existing data root')
     from nexus_web_mirror import WebMirror
-    mirror = WebMirror(poll_interval=.5)
+    mirror = None if windows_monitor else WebMirror(poll_interval=.5)
     sequence, session = 0, uuid.uuid4().hex
     while True:
         line = sys.stdin.buffer.readline(8193)
@@ -92,14 +96,19 @@ def main():
                 before = request.get('log_before')
                 if before is not None and (type(before) is not int or not 0 <= before <= 9007199254740991):
                     raise ValueError('Invalid history cursor')
-                frame = presentation(mirror, request['tab'], request['filter'], request['height'], before)
+                frame = (windows_monitor.snapshot(request['tab'], request['filter'], request['height'], before)
+                         if windows_monitor else presentation(mirror, request['tab'], request['filter'], request['height'], before))
             elif request.get('op') == 'action':
                 if set(request) != {'schema_version', 'op', 'action', 'value', 'confirmed'} or type(request['confirmed']) is not bool:
                     raise ValueError('Invalid action fields')
-                from nexus_tauri_actions import action
-                result = action(request['action'], request['value'], request['confirmed'])
+                if windows_monitor:
+                    result = windows_monitor.action(request['action'], request['value'], request['confirmed'])
+                else:
+                    from nexus_tauri_actions import action
+                    result = action(request['action'], request['value'], request['confirmed'])
                 frame = {'schema_version': 1, 'result': result}
-                mirror.refresh.set()
+                if mirror:
+                    mirror.refresh.set()
             else:
                 raise ValueError('Unsupported desktop operation')
         except (ValueError, OSError, subprocess.SubprocessError) as error:

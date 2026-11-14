@@ -1,0 +1,29 @@
+[package]
+name = "keryx-llama-vk"
+version = "0.0.5"
+edition = "2021"
+rust-version = "1.88"
+license = "GPL-3.0-only"
+publish = false
+description = "Vulkan keryx_llama runtime (ABI 3: inference + PoM v5) for nexus-live-vulkan-worker"
+
+[lib]
+name = "keryx_llama_vk"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+anyhow = "1"
+ash = "0.38"
+blake3 = "1"
+log = "0.4"
+keryx-vulkan = { path = "../../vendor/keryx-miner-rdna3/keryx-vulkan" }
+keryx-verifiable-inference = { path = "../../vendor/keryx-verifiable-inference" }
+# In-process llama.cpp with the Vulkan backend and the keryx exports the shared walk needs
+# (raw device handles, tensor device addresses, guarded queue submit). Pinned to the revision
+# keryx-miner-rdna3 v0.3.34 builds; its llama.cpp submodule is shmutalov/llama.cpp ef4341ffd.
+llama-cpp-2 = { git = "https://github.com/shmutalov/llama-cpp-rs", rev = "92b2e1ff9d733f3ce7de119a4653042568c95190", default-features = false, features = ["vulkan"] }
+llama-cpp-sys-2 = { git = "https://github.com/shmutalov/llama-cpp-rs", rev = "92b2e1ff9d733f3ce7de119a4653042568c95190", default-features = false }
+
+[dev-dependencies]
+# The vendored engine's own tests initialise a logger.
+env_logger = "0.9"

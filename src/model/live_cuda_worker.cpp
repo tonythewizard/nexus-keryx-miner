@@ -2099,7 +2099,8 @@ int main(int argc,char **argv) {
             const bool sent=stratum_client->submit_pool_ai_result(message->scope,result);
             std::cout<<"POOL_AI_RESULT sent="<<(sent?"true":"false")<<" scope_bound=true pool_signing_required=true\n"<<std::flush;
           }catch(const std::exception&){
-            std::cout<<"POOL_AI_REQUEST_FAILED scope_bound=true empty_response_sent=false\n"<<std::flush;
+            const bool declined=stratum_client->decline_pool_ai(*message);
+            std::cout<<"POOL_AI_REQUEST_FAILED scope_bound=true empty_response_sent=false declined="<<(declined?"true":"false")<<"\n"<<std::flush;
           }
           telemetry.set_state("ACTIVE","IDLE","",submit_enabled?"ARMED":"DISABLED");
           continue;

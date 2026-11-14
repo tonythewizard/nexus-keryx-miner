@@ -14,6 +14,7 @@
 #include <openssl/evp.h>
 #include <openssl/sha.h>
 #include <stdexcept>
+#include <zlib.h>
 
 namespace keryx::nexus::ai {
 namespace {
@@ -100,6 +101,99 @@ std::string b64(std::string_view s) {
                   static_cast<int>(s.size()));
   return out;
 }
+constexpr unsigned char compressed_prompt_magic[4] = {0x00, 'K', 'Z', 0x01};
+
+std::string to_utf8_lossy(std::string_view in) {
+  std::string out;
+  out.reserve(in.size());
+  for (std::size_t i = 0; i < in.size();) {
+    const auto c = static_cast<unsigned char>(in[i++]);
+    if (c < 128) {
+      out.push_back(static_cast<char>(c));
+      continue;
+    }
+    unsigned count = 0;
+    unsigned char lo = 128, hi = 191;
+    if (c >= 194 && c <= 223) {
+      count = 1;
+    } else if (c >= 224 && c <= 239) {
+      count = 2;
+      if (c == 224) lo = 160;
+      if (c == 237) hi = 159;
+    } else if (c >= 240 && c <= 244) {
+      count = 3;
+      if (c == 240) lo = 144;
+      if (c == 244) hi = 143;
+    } else {
+      out.append("\xEF\xBF\xBD");
+      continue;
+    }
+    if (i + count > in.size()) {
+      out.append("\xEF\xBF\xBD");
+      break;
+    }
+    const auto second = static_cast<unsigned char>(in[i]);
+    if (second < lo || second > hi) {
+      out.append("\xEF\xBF\xBD");
+      continue;
+    }
+    bool valid = true;
+    for (unsigned k = 1; k < count; ++k) {
+      const auto next = static_cast<unsigned char>(in[i + k]);
+      if (next < 128 || next > 191) {
+        valid = false;
+        break;
+      }
+    }
+    if (!valid) {
+      out.append("\xEF\xBF\xBD");
+      continue;
+    }
+    out.push_back(static_cast<char>(c));
+    for (unsigned k = 0; k < count; ++k) {
+      out.push_back(in[i++]);
+    }
+  }
+  return out;
+}
+
+std::string decode_private_prompt(std::string_view bytes) {
+  if (bytes.size() < 4 ||
+      static_cast<unsigned char>(bytes[0]) != compressed_prompt_magic[0] ||
+      static_cast<unsigned char>(bytes[1]) != compressed_prompt_magic[1] ||
+      static_cast<unsigned char>(bytes[2]) != compressed_prompt_magic[2] ||
+      static_cast<unsigned char>(bytes[3]) != compressed_prompt_magic[3]) {
+    return to_utf8_lossy(bytes);
+  }
+
+  std::string_view deflated = bytes.substr(4);
+  z_stream strm{};
+  strm.next_in = reinterpret_cast<Bytef *>(const_cast<char *>(deflated.data()));
+  strm.avail_in = static_cast<uInt>(deflated.size());
+  if (inflateInit2(&strm, -15) != Z_OK) {
+    return to_utf8_lossy(deflated);
+  }
+
+  std::string inflated;
+  char buf[8192];
+  int ret = Z_OK;
+  while (ret == Z_OK && inflated.size() < max_prompt) {
+    strm.next_out = reinterpret_cast<Bytef *>(buf);
+    const std::size_t want = std::min<std::size_t>(sizeof(buf), max_prompt - inflated.size());
+    strm.avail_out = static_cast<uInt>(want);
+    ret = inflate(&strm, Z_NO_FLUSH);
+    const std::size_t have = want - strm.avail_out;
+    inflated.append(buf, have);
+    if (ret == Z_STREAM_END) break;
+  }
+  inflateEnd(&strm);
+
+  if (inflated.empty() && ret != Z_STREAM_END) {
+    return to_utf8_lossy(deflated);
+  }
+  return to_utf8_lossy(inflated);
+}
+
 std::string decode(std::string_view s) {
   need(!s.empty() && s.size() % 4 == 0 &&
            s.size() <= 4 * ((max_prompt + 2) / 3),
@@ -117,38 +211,7 @@ std::string decode(std::string_view s) {
        "Pool AI prompt bounds");
   out.resize(static_cast<std::size_t>(n));
   need(b64(out) == s, "Pool AI noncanonical base64");
-  // Validate UTF-8 without treating U+0000 as a C terminator.
-  for (std::size_t i = 0; i < out.size();) {
-    const auto c = static_cast<unsigned char>(out[i++]);
-    if (c < 128)
-      continue;
-    unsigned count{};
-    unsigned char lo = 128, hi = 191;
-    if (c >= 194 && c <= 223)
-      count = 1;
-    else if (c >= 224 && c <= 239) {
-      count = 2;
-      if (c == 224)
-        lo = 160;
-      if (c == 237)
-        hi = 159;
-    } else if (c >= 240 && c <= 244) {
-      count = 3;
-      if (c == 240)
-        lo = 144;
-      if (c == 244)
-        hi = 143;
-    } else
-      throw std::runtime_error("Pool AI invalid UTF-8");
-    need(i + count <= out.size(), "Pool AI truncated UTF-8");
-    auto second = static_cast<unsigned char>(out[i++]);
-    need(second >= lo && second <= hi, "Pool AI invalid UTF-8 continuation");
-    while (--count) {
-      auto next = static_cast<unsigned char>(out[i++]);
-      need(next >= 128 && next <= 191, "Pool AI invalid UTF-8 continuation");
-    }
-  }
-  return out;
+  return decode_private_prompt(out);
 }
 struct Fd {
   int fd{-1};
