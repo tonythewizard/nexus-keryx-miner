@@ -82,6 +82,32 @@ std::uint64_t monotonic_ns() {
       std::chrono::steady_clock::now().time_since_epoch()).count());
 }
 
+bool is_polaris_device(std::string_view device_id) {
+#ifndef _WIN32
+  try {
+    std::string pci_str{device_id};
+    if (pci_str.rfind("pci:", 0) == 0) pci_str = pci_str.substr(4);
+    const auto dev_file = fs::path("/sys/bus/pci/devices") / pci_str / "device";
+    if (fs::exists(dev_file)) {
+      std::ifstream f(dev_file);
+      std::string id_str;
+      if (f >> id_str) {
+        if (id_str == "0x67df" || id_str == "0x67ef" || id_str == "0x67ff" ||
+            id_str == "0x67c0" || id_str == "0x67c1" || id_str == "0x67c2" ||
+            id_str == "0x67c4" || id_str == "0x67c7" || id_str == "0x67e0" ||
+            id_str == "0x67e1" || id_str == "0x67e3" || id_str == "0x67e8" ||
+            id_str == "0x67eb" || id_str == "0x6980" || id_str == "0x6981" ||
+            id_str == "0x6985" || id_str == "0x6986" || id_str == "0x6987" ||
+            id_str == "0x6995" || id_str == "0x699f" || id_str == "0x6fdf") {
+          return true;
+        }
+      }
+    }
+  } catch (...) {}
+#endif
+  return false;
+}
+
 std::atomic_bool process_stop{false};
 extern "C" void request_stop(int) { process_stop.store(true, std::memory_order_relaxed); }
 
@@ -407,6 +433,13 @@ int main(int argc, char **argv) {
     }
   }
 
+  if (oracle_path.empty()) {
+    const auto cand = developer_data_root() / "artifacts/oracle/34b4cb376175106bad4d8d6b6fdf270c75c799f5b6057e50cdb27614c9265482/nexus-m21-oracle";
+    if (fs::exists(cand)) {
+      oracle_path = cand.string();
+    }
+  }
+
   const bool pool_mode = stratum::is_stratum_endpoint_url(endpoint);
   if (!pool_mode) {
     endpoint = canonical_grpc_endpoint(endpoint);
@@ -429,6 +462,11 @@ int main(int argc, char **argv) {
             << " proof_threads=" << proof_threads << "\n" << std::flush;
 
   startup.record("CONFIG_VALIDATION", StartupResult::Pass, "Device, model, and network parameters validated");
+
+  const bool is_polaris = is_polaris_device(device_id);
+  if (is_polaris) {
+    std::cout << "DEVICE_ARCHITECTURE=POLARIS device=" << device_id << " wave=64 lds_kb=4.1 batch_opt=" << batch_size << "\n" << std::flush;
+  }
 
   NativePomTelemetry telemetry(monotonic_ns());
   telemetry.set_pom_backend("vulkan-jit");
@@ -799,8 +837,15 @@ int main(int argc, char **argv) {
       std::cout << "POOL_AI_ROUTE=QUALIFIED native=true backend=vulkan verified_seeds=2 durable_capture_before_send=true\n"
                 << std::flush;
     } catch (const std::exception &e) {
-      std::cerr << "POOL_AI_ROUTE=UNQUALIFIED detail=\"" << e.what() << "\"\n" << std::flush;
-      return 78;
+      if (is_polaris) {
+        std::cout << "POOL_AI_ROUTE=UNQUALIFIED detail=\"" << e.what() << "\" action=POM_ONLY\n" << std::flush;
+        pool_h15.reset();
+        pool_ai.reset();
+        ai_responses_enabled = false;
+      } else {
+        std::cerr << "POOL_AI_ROUTE=UNQUALIFIED detail=\"" << e.what() << "\"\n" << std::flush;
+        return 78;
+      }
     }
   }
 
@@ -1290,7 +1335,8 @@ int main(int argc, char **argv) {
       const auto pad_words = v5 ? v5_pad_seed_words(pad.seed) : std::array<std::uint64_t, 4>{};
       const std::uint32_t preferred_v5 = shared_runtime->pom_v5_batch();
       const std::uint32_t requested_batch = (v5 && shared_runtime->pom_v5_ready())
-          ? std::min<std::uint32_t>(batch_size, preferred_v5 ? preferred_v5 : 8192u)
+          ? (is_polaris ? std::min<std::uint32_t>(batch_size, 16384u)
+                        : std::min<std::uint32_t>(batch_size, preferred_v5 ? preferred_v5 : 8192u))
           : batch_size;
       const std::uint64_t batch_start=nonce_cursor;
       const auto dispatch_batch=static_cast<std::uint32_t>(pool_nonce_exhausted?0:bounded_nonce_batch(
@@ -1473,7 +1519,8 @@ int main(int argc, char **argv) {
     const auto pad_words = v5 ? v5_pad_seed_words(pad.seed) : std::array<std::uint64_t, 4>{};
     const std::uint32_t preferred_v5 = shared_runtime->pom_v5_batch();
     const std::uint32_t requested_batch = (v5 && shared_runtime->pom_v5_ready())
-        ? std::min<std::uint32_t>(batch_size, preferred_v5 ? preferred_v5 : 8192u)
+        ? (is_polaris ? std::min<std::uint32_t>(batch_size, 16384u)
+                      : std::min<std::uint32_t>(batch_size, preferred_v5 ? preferred_v5 : 8192u))
         : batch_size;
 
     const auto batch_start=nonce_cursor;

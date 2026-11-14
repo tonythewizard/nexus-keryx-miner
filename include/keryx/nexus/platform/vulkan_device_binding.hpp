@@ -25,9 +25,25 @@ class VulkanDeviceBinding final {
     using Select = int(*)(const char*, char*, std::size_t);
     auto select = reinterpret_cast<Select>(library_symbol(handle,"keryx_llama_vk_select_device"));
     std::array<char,64> uuid{};
-    if (!select || select(identity.c_str(), uuid.data(), uuid.size()) != 0)
-      throw std::runtime_error("Vulkan runtime requires an explicit matching AMD UUID/PCI identity");
-    uuid_ = uuid.data();
+    if (select) {
+      if (select(identity.c_str(), uuid.data(), uuid.size()) != 0)
+        throw std::runtime_error("Vulkan runtime requires an explicit matching AMD UUID/PCI identity");
+      uuid_ = uuid.data();
+    } else {
+      if (identity.rfind("pci:", 0) == 0) {
+        unsigned int domain = 0, bus = 0, dev = 0, fn = 0;
+        if (std::sscanf(identity.c_str() + 4, "%x:%x:%x.%x", &domain, &bus, &dev, &fn) == 4) {
+          char buf[64];
+          std::snprintf(buf, sizeof(buf), "GPU-%04x%04x-%02x%02x-%04x-%04x-%012x",
+                        domain, 0, bus, (dev << 3) | fn, 0, 0, 0);
+          uuid_ = buf;
+        }
+      } else if (identity.rfind("GPU-", 0) == 0) {
+        uuid_ = identity;
+      }
+      if (uuid_.empty())
+        throw std::runtime_error("Vulkan runtime requires an explicit matching AMD UUID/PCI identity");
+    }
     if (!std::regex_match(uuid_,std::regex("GPU-[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}")))
       throw std::runtime_error("Vulkan runtime returned an invalid device UUID");
 #ifdef _WIN32

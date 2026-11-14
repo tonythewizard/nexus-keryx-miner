@@ -426,6 +426,27 @@ unsafe fn bytes<'a>(ptr: *const u8, len: usize) -> Result<&'a [u8], ()> {
     Ok(if len == 0 { &[] } else { unsafe { slice::from_raw_parts(ptr, len) } })
 }
 
+pub const COMPRESSED_PROMPT_MAGIC: [u8; 4] = [0x00, b'K', b'Z', 0x01];
+pub const MAX_DECOMPRESSED_PROMPT_LEN: u64 = 1 << 20;
+
+/// Plaintext of an opened private prompt (solo) or pool request prompt:
+/// inflated when it carries the compression magic, cut at the cap. A stream that fails to inflate
+/// yields its partial output, else the raw bytes.
+pub fn decode_private_prompt(bytes: &[u8]) -> Vec<u8> {
+    use std::io::Read;
+    let Some(deflated) = bytes.strip_prefix(&COMPRESSED_PROMPT_MAGIC[..]) else {
+        return bytes.to_vec();
+    };
+    let mut inflated = Vec::new();
+    let read = flate2::read::DeflateDecoder::new(deflated)
+        .take(MAX_DECOMPRESSED_PROMPT_LEN)
+        .read_to_end(&mut inflated);
+    if read.is_err() && inflated.is_empty() {
+        return deflated.to_vec();
+    }
+    inflated
+}
+
 /// Opens a request without exporting shared/root or responder key material to C++.
 /// Returns 0 on success, 1 for a non-recipient, 2 for an insufficient prompt buffer.
 /// # Safety
@@ -445,13 +466,14 @@ pub unsafe extern "C" fn nexus_ai_open_request_v2(
     let secret = unsafe { &*escrow_secret.cast::<[u8; 32]>() };
     let Some(request) = AiRequestPayload::deserialize(raw) else { return -2; };
     let is_private = request.is_private();
-    let mut prompt = if is_private {
+    let raw_prompt = if is_private {
         match open_request(&request, secret) {
             Ok(mut opened) => std::mem::take(&mut opened.prompt),
             Err(keryx_inference::PrivateError::NotARecipient) => return 1,
             Err(_) => return -3,
         }
     } else { request.prompt.clone() };
+    let mut prompt = decode_private_prompt(&raw_prompt);
     let capacity = unsafe { *prompt_len };
     unsafe { *prompt_len = prompt.len(); *private_out = u8::from(is_private); }
     let rc = if prompt.len() > capacity || (!prompt.is_empty() && prompt_out.is_null()) { 2 }
@@ -956,5 +978,36 @@ mod private_protocol_tests {
         assert_eq!(unsafe { nexus_ai_build_signed_response(id.as_ptr(),secret.as_ptr(),cid.as_ptr(),
             protocol_rules::MAINNET_H15, b"answer".as_ptr(),6,body.as_ptr(),body.len(),out.as_mut_ptr(),&mut len) },-10);
         assert_eq!(out,[0xcc;512]);
+    }
+
+    #[test]
+    fn private_prompt_inflates_when_marked() {
+        use std::io::Write;
+        let deflate = |data: &[u8]| {
+            let mut enc = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::best());
+            enc.write_all(data).unwrap();
+            let mut out = COMPRESSED_PROMPT_MAGIC.to_vec();
+            out.extend(enc.finish().unwrap());
+            out
+        };
+
+        assert_eq!(decode_private_prompt(b"Bonjour, \xc3\xa7a va ?"), b"Bonjour, \xc3\xa7a va ?");
+        let text = b"Entr\xc3\xa9e 41 \xe2\x80\x94 le code est ORCHID\xc3\x89E-7319. ".repeat(500);
+        let packed = deflate(&text);
+        assert!(packed.len() < text.len() / 10);
+        assert_eq!(decode_private_prompt(&packed), text);
+
+        let mut corrupt = COMPRESSED_PROMPT_MAGIC.to_vec();
+        corrupt.extend([0xFF; 32]);
+        assert_eq!(decode_private_prompt(&corrupt), vec![0xFF; 32]);
+
+        let ascii: Vec<u8> = (0..4000).map(|i| b'a' + (i * 7 % 26) as u8).collect();
+        let mut truncated = deflate(&ascii);
+        truncated.truncate(truncated.len() / 2);
+        let partial = decode_private_prompt(&truncated);
+        assert!(!partial.is_empty() && ascii.starts_with(&partial));
+
+        let bomb = deflate(&vec![b'a'; MAX_DECOMPRESSED_PROMPT_LEN as usize + 1]);
+        assert_eq!(decode_private_prompt(&bomb), vec![b'a'; MAX_DECOMPRESSED_PROMPT_LEN as usize]);
     }
 }

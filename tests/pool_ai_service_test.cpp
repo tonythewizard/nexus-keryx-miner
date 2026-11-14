@@ -5,6 +5,8 @@
 #include <google/protobuf/util/json_util.h>
 #include <iostream>
 #include <stdexcept>
+#include <zlib.h>
+#include <openssl/evp.h>
 using namespace keryx::nexus;
 void check(bool b, const char *s) {
   if (!b)
@@ -215,6 +217,54 @@ int main(int argc, char **argv) {
       refused = true;
     }
     check(refused && inferences == 4, "corrupt record regenerated response");
+    // Test compressed private prompt decompression (\x00KZ\x01 + DEFLATE)
+    {
+      const std::string text = "Hello compressed prompt world from pool AI!";
+      z_stream strm{};
+      deflateInit2(&strm, Z_BEST_COMPRESSION, Z_DEFLATED, -15, 8, Z_DEFAULT_STRATEGY);
+      strm.next_in = reinterpret_cast<Bytef *>(const_cast<char *>(text.data()));
+      strm.avail_in = static_cast<uInt>(text.size());
+      std::string comp = std::string("\x00KZ\x01", 4);
+      char zbuf[1024];
+      int zret = Z_OK;
+      while (zret == Z_OK) {
+        strm.next_out = reinterpret_cast<Bytef *>(zbuf);
+        strm.avail_out = sizeof(zbuf);
+        zret = deflate(&strm, Z_FINISH);
+        comp.append(zbuf, sizeof(zbuf) - strm.avail_out);
+      }
+      deflateEnd(&strm);
+
+      std::string comp_b64(4 * ((comp.size() + 2) / 3), '\0');
+      EVP_EncodeBlock(reinterpret_cast<unsigned char *>(comp_b64.data()),
+                      reinterpret_cast<const unsigned char *>(comp.data()),
+                      static_cast<int>(comp.size()));
+
+      std::string comp_req(64, '9');
+      const auto comp_wire =
+          "{\"method\":\"mining.ai_request\",\"params\":[\"" + comp_req + "\",\"" +
+          comp_req + "\",\"" + comp_req + "\",\"" + std::string(64, '3') +
+          "\",\"" + comp_b64 + "\",16,\"18446744073709551615\",{\"trace\":{\"tier\":0,"
+          "\"prompt_len\":" + std::to_string(text.size()) + ",\"chain\":true,\"attention\":true}}]}";
+
+      bool comp_infer_called = false;
+      auto comp_infer = [&](std::string_view prompt, std::uint32_t tokens, const auto &) {
+        comp_infer_called = true;
+        check(prompt == text, "compressed prompt did not inflate to original text");
+        check(tokens == 16, "tokens mismatch");
+        ai::PoolAiService::Capture c;
+        c.answer.answer = "OK_COMPRESSED";
+        c.answer.sealed_plaintext = {9, 9, 9};
+        c.answer.commitment.fill(0);
+        c.answer.commitment[33] = 1;
+        c.record = {1, 2, 3};
+        return c;
+      };
+      ai::PoolAiService comp_svc(root / "comp", model, comp_infer, open);
+      auto comp_res = comp_svc.handle("pool-A", "synthetic", comp_wire);
+      check(comp_infer_called, "compressed prompt infer was not called");
+      check(!comp_res.empty(), "empty compressed response");
+    }
     std::cout << "POOL_AI_SERVICE=PASS nul_exact=true durable_restart=true "
                  "interrupted_publication_recovered=true "
                  "duplicate_no_regen=true response_immutable=true "
