@@ -1651,30 +1651,47 @@ bool StratumV4Client::process_inbound_line(std::string_view line) {
 
     if (method == "mining.ai_request" || method == "mining.ai_opening" ||
         method == "mining.ai_draw") {
+      std::optional<std::uint64_t> request_id;
+      if (const auto id_it = fields.find("id"); id_it != fields.end())
+        request_id = value_to_u64(id_it->second);
+
+      std::string_view reason;
+      bool trace_ready;
       {
         std::lock_guard lock(mutex_);
-        if(config_.pool_telemetry.trace_ready&&authorized_&&subscribed_&&
-            method!="mining.ai_draw"&&(method=="mining.ai_opening"||pool_mining_available_)&&pool_ai_queue_.size()<8&&
-            (method=="mining.ai_opening"||!ai_inference_busy_.load(std::memory_order_acquire))) {
-          std::optional<std::uint64_t> request_id;
-          if(const auto id_it=fields.find("id");id_it!=fields.end())request_id=value_to_u64(id_it->second);
-          pool_ai_queue_.push_back({endpoint_.raw_url,exact_json,std::chrono::steady_clock::now(),method,request_id});
+        trace_ready = config_.pool_telemetry.trace_ready;
+        if (!authorized_ || !subscribed_)
+          reason = "session_unavailable";
+        else if (method == "mining.ai_draw")
+          reason = "unsupported_method";
+        else if (!trace_ready)
+          reason = "trace_unavailable";
+        else if (method == "mining.ai_request" && !pool_mining_available_)
+          reason = "mining_unavailable";
+        else if (pool_ai_queue_.size() >= 8)
+          reason = "queue_full";
+        else if (method == "mining.ai_request" &&
+                 ai_inference_busy_.load(std::memory_order_acquire))
+          reason = "inference_busy";
+        else {
+          pool_ai_queue_.push_back({endpoint_.raw_url, exact_json,
+                                    std::chrono::steady_clock::now(), method,
+                                    request_id});
           return true;
         }
-      }
-      // The SOLO dispatcher is not a qualified Stratum answer/opening route.
-      // Decline explicitly instead of silently accepting an unserved request.
-      const auto id_it = fields.find("id");
-      if (id_it != fields.end()) {
-        const auto request_id = value_to_u64(id_it->second);
-        if (request_id) {
-          std::lock_guard lock(mutex_);
+
+        // Preserve the error code and text for existing pool clients. The
+        // optional data is a fixed identifier with no request contents.
+        if (request_id)
           send_line_locked("{\"id\":" + std::to_string(*request_id) +
-              ",\"result\":null,\"error\":[46,\"Nexus pool AI route not qualified\",null]}");
-        }
+                           ",\"result\":null,\"error\":[46,"
+                           "\"Nexus pool AI route not qualified\",\"" +
+                           std::string(reason) + "\"]}");
       }
-      std::cout << "{\"event\":\"POOL_AI_NOT_READY\",\"trace\":0,"
-                   "\"response_accepted\":false}\n" << std::flush;
+      std::cout << "{\"event\":\"POOL_AI_NOT_READY\",\"trace\":"
+                << (trace_ready ? 1 : 0) << ",\"method\":\"" << method
+                << "\",\"reason\":\"" << reason
+                << "\",\"response_accepted\":false}\n" << std::flush;
       return true;
     }
 
