@@ -422,6 +422,7 @@ class DashboardTests(unittest.TestCase):
             {"id": "supr", "name": "Suprnova", "url": "stratum+tcp://krx.suprnova.cc:4404"}]}
         self.assertEqual(dashboard.pool_display_name(config, {"endpoint": "stratum+tcp://krx.suprnova.cc:4404"}), "Suprnova")
         self.assertEqual(dashboard.pool_display_name(config, {"endpoint": "stratum+ssl://krx.cryo-pool.com:5555"}), "Cryo Pool")
+        self.assertEqual(dashboard.pool_display_name(config, {"endpoint": "stratum+ssl://nodvexa.eu:5555"}), "Nodvexa Pool")
         self.assertEqual(dashboard.pool_display_name(config, {"endpoint": "stratum+ssl://stratum-eu2.suprnova.cc:4405"}), "Suprnova")
         self.assertEqual(dashboard.pool_display_name(config, {"endpoint": "stratum+tcp://custom.invalid:1234"}), "custom.invalid")
         self.assertEqual(dashboard.pool_display_name(config, {}), "Cryo Pool")

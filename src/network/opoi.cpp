@@ -606,6 +606,6 @@ std::pair<std::string,std::string> official_qwen35_trace_prompt(std::string_view
 
 namespace keryx::nexus::opoi {
 bool StockLlamaRuntime::supports_length_aware_tracing() const noexcept {
-  return impl_&&impl_->trace_api.generate_n;
+  return impl_ && (impl_->trace_api.generate_n || impl_->trace_api.generate);
 }
 }

@@ -57,6 +57,19 @@ PRESET_CRYO = {
     "note": "TLS 5555; NVIDIA with working AI inference required",
 }
 
+PRESET_NODVEXA = {
+    "id": "nodvexa",
+    "name": "Nodvexa Pool",
+    "url": "stratum+ssl://nodvexa.eu:5555",
+    "worker": "",
+    "password": "x",
+    "tls": True,
+    "priority": 4,
+    "preset": True,
+    "configured": True,
+    "note": "stratum+ssl://nodvexa.eu:5555 (TLS 5555 PPLNS; SOLO on 5556)",
+}
+
 
 def _state_dir() -> Path:
     custom = os.environ.get("NEXUS_MINING_MODE_FILE")
@@ -87,6 +100,7 @@ def default_config() -> dict:
             dict(PRESET_KERYXPOOL),
             dict(PRESET_SUPRNOVA),
             dict(PRESET_CRYO),
+            dict(PRESET_NODVEXA),
         ],
     }
 
@@ -175,6 +189,10 @@ def pool_requirements(url: str) -> dict:
                 "escrow_approval_required": None, "escrow_approved": None,
                 "required_vendor": "NVIDIA", "ai_service_required": True,
                 "escrow_note": "Bridge AI service and payout policy; connection alone does not validate mining or escrow"}
+    if host in ("nodvexa.eu", "www.nodvexa.eu"):
+        return {"pool": "nodvexa", "telemetry_required": False,
+                "escrow_approval_required": None, "escrow_approved": None,
+                "escrow_note": "Nodvexa Pool 0% PPLNS / 2% SOLO; TLS required"}
     return {"pool": "custom", "telemetry_required": False,
             "escrow_approval_required": None, "escrow_approved": None,
             "escrow_note": "Pool escrow policy unknown"}
@@ -307,6 +325,7 @@ def load() -> dict:
     has_suprnova = False
     has_keryxpool = False
     has_cryo = False
+    has_nodvexa = False
     for p in pools_raw:
         if not isinstance(p, dict):
             continue
@@ -324,6 +343,8 @@ def load() -> dict:
             has_keryxpool = True
         elif pid == "cryopool":
             has_cryo = True
+        elif pid == "nodvexa":
+            has_nodvexa = True
         is_conf = bool(url.strip())
         note = str(p.get("note", ""))
         if pid == "keryxpool" and not is_conf:
@@ -352,6 +373,8 @@ def load() -> dict:
         pools.append(dict(PRESET_SUPRNOVA))
     if not has_cryo:
         pools.append(dict(PRESET_CRYO))
+    if not has_nodvexa:
+        pools.append(dict(PRESET_NODVEXA))
 
     # Sort pools by priority
     pools.sort(key=lambda x: x["priority"])

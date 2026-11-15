@@ -2042,6 +2042,11 @@ int main(int argc,char **argv) {
     std::string last_pool_job_id;
     std::uint64_t last_pool_nonce_fixed=0;
     std::uint64_t last_pool_nonce_mask=0;
+    std::optional<stratum::StratumPoolJob> cached_pool_job;
+    std::optional<consensus::V5PadSpec> cached_v5_pad;
+    std::uint8_t cached_pad_tier = 255;
+    std::uint64_t cached_pad_daa = 0;
+    std::string current_telemetry_gpu_activity;
     // This worker's admitted catalog is tier 0. Higher tiers must not enter it
     // until their model/tree/runtime and service routes are independently qualified.
     const auto admitted_model=hex(official_model.data(),official_model.size());
@@ -2167,18 +2172,26 @@ int main(int argc,char **argv) {
           telemetry.set_gpu_activity("WAITING_TEMPLATE");
           continue;
         }
-        const auto wait_start_ns = monotonic_ns();
-        auto maybe_pool_job = stratum_client->current_job();
-        if (!maybe_pool_job) {
-          std::this_thread::sleep_for(std::chrono::milliseconds(10));
-          maybe_pool_job = stratum_client->current_job();
+        const bool need_fetch_job = !cached_pool_job || pool_nonce_exhausted ||
+                                    stratum_client->current_generation() != last_pool_generation;
+        if (need_fetch_job) {
+          const auto wait_start_ns = monotonic_ns();
+          auto maybe_pool_job = stratum_client->current_job();
+          if (!maybe_pool_job) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            maybe_pool_job = stratum_client->current_job();
+          }
+          telemetry.record_template_wait(monotonic_ns() - wait_start_ns);
+          if (!maybe_pool_job) {
+            if (current_telemetry_gpu_activity != "WAITING_TEMPLATE") {
+              telemetry.set_gpu_activity("WAITING_TEMPLATE");
+              current_telemetry_gpu_activity = "WAITING_TEMPLATE";
+            }
+            continue;
+          }
+          cached_pool_job = std::move(maybe_pool_job);
         }
-        telemetry.record_template_wait(monotonic_ns() - wait_start_ns);
-        if (!maybe_pool_job) {
-          telemetry.set_gpu_activity("WAITING_TEMPLATE");
-          continue;
-        }
-        auto pool_job = *maybe_pool_job;
+        auto &pool_job = *cached_pool_job;
         const auto pom_epoch = pom_lifecycle.epoch();
         const bool job_switched = (pool_job.job_id != last_pool_job_id);
         const bool extranonce_changed = (pool_job.nonce_fixed != last_pool_nonce_fixed ||
@@ -2241,7 +2254,10 @@ int main(int argc,char **argv) {
           const auto &pph = pool_job.pre_pow;
           const auto &eff_target = pool_job.effective_target;
           const auto preparation_end_ns = monotonic_ns();
-          if (!stratum_client->is_job_current(pool_job.generation, pool_job.job_id)) continue;
+          if (stratum_client->current_generation() != pool_job.generation) {
+            cached_pool_job.reset();
+            continue;
+          }
           const auto refresh_end_ns = monotonic_ns();
           const auto primary_selection_token = live_selection->token(LiveGpuSelection::Nvidia);
           if (!live_selection->allows(LiveGpuSelection::Nvidia, primary_selection_token)) {
@@ -2250,7 +2266,10 @@ int main(int argc,char **argv) {
               resident.reset();
             });
             primary_selection_paused = true;
-            telemetry.set_gpu_activity("POM_DISABLED_BY_SELECTION");
+            if (current_telemetry_gpu_activity != "POM_DISABLED_BY_SELECTION") {
+              telemetry.set_gpu_activity("POM_DISABLED_BY_SELECTION");
+              current_telemetry_gpu_activity = "POM_DISABLED_BY_SELECTION";
+            }
             telemetry.set_state("PAUSED", "IDLE", "GPU_SELECTION", submit_enabled ? "ARMED" : "DISABLED");
             std::this_thread::sleep_for(std::chrono::milliseconds(20));
             continue;
@@ -2266,7 +2285,10 @@ int main(int argc,char **argv) {
             std::this_thread::sleep_for(std::chrono::milliseconds(25));continue;
           }
           ResidentSearchResult search;
-          telemetry.set_gpu_activity("CUDA_RESIDENT_SEARCH");
+          if (current_telemetry_gpu_activity != "CUDA_RESIDENT_SEARCH") {
+            telemetry.set_gpu_activity("CUDA_RESIDENT_SEARCH");
+            current_telemetry_gpu_activity = "CUDA_RESIDENT_SEARCH";
+          }
           bool searched = false;
           try {
             searched = live_selection->allows(LiveGpuSelection::Nvidia, primary_selection_token) &&
@@ -2284,10 +2306,15 @@ int main(int argc,char **argv) {
                   telemetry.set_state("ACTIVE", "IDLE", "", submit_enabled ? "ARMED" : "DISABLED");
                   primary_selection_paused = false;
                 }
-                if (!stratum_client->is_job_current(pool_job.generation, pool_job.job_id) ||
+                if (stratum_client->current_generation() != pool_job.generation ||
                     stop.load(std::memory_order_relaxed) || pom_lifecycle.cancel_pom(pom_epoch)) return;
                 if (v5) {
-                  const auto pad = official_v5_pad(header.pom_tier, official_model, official_root, header.daa_score);
+                  if (!cached_v5_pad || cached_pad_tier != header.pom_tier || cached_pad_daa != header.daa_score) {
+                    cached_v5_pad = official_v5_pad(header.pom_tier, official_model, official_root, header.daa_score);
+                    cached_pad_tier = header.pom_tier;
+                    cached_pad_daa = header.daa_score;
+                  }
+                  const auto &pad = *cached_v5_pad;
                   if (!resident->v5_ready_for(pad) &&
                       !resident->prepare_v5(pad, [&] {
                         return stop.load() || pom_lifecycle.cancel_pom(pom_epoch) ||
@@ -2297,7 +2324,7 @@ int main(int argc,char **argv) {
                 } else if (resident->v5_pad_bytes()) {
                   resident->release_v5();
                 }
-                if (!stratum_client->is_job_current(pool_job.generation, pool_job.job_id) ||
+                if (stratum_client->current_generation() != pool_job.generation ||
                     stop.load(std::memory_order_relaxed) || pom_lifecycle.cancel_pom(pom_epoch)) return;
                 telemetry.work_launched(batch_count);
                 search = resident->run(pph, header.timestamp, header.daa_score, eff_target, batch_start, batch_count);
@@ -2318,9 +2345,10 @@ int main(int argc,char **argv) {
           if(pool_nonce_exhausted) std::cout<<"NONCE_RANGE_EXHAUSTED backend=CUDA action=WAIT_NEW_JOB\n"<<std::flush;
           telemetry.record_cuda_times(search.kernel_ms, 0, 0, search.kernel_ms);
           if (!live_selection->allows(LiveGpuSelection::Nvidia, primary_selection_token) ||
-              !stratum_client->is_job_current(pool_job.generation, pool_job.job_id) ||
+              stratum_client->current_generation() != pool_job.generation ||
               stop.load(std::memory_order_relaxed) || pom_lifecycle.cancel_pom(pom_epoch)) {
             telemetry.work_stale(search.completed);
+            cached_pool_job.reset();
             continue;
           }
           telemetry.eligible_attempts(search.completed);

@@ -98,8 +98,14 @@ inline LiveWorkerConfig parse_live_worker_config(int argc, char **argv,
       pool_url = (url_env && *url_env) ? std::string(url_env) : (is_stratum_endpoint(endpoint) ? endpoint : std::string{});
       if (pool_url.empty())
         throw std::runtime_error("pool mode requires NEXUS_POOL_URL or a stratum:// endpoint");
-      if (const char *worker_env = std::getenv("NEXUS_POOL_WORKER"); worker_env && *worker_env)
-        pool_worker = worker_env;
+      if (const char *worker_env = std::getenv("NEXUS_POOL_WORKER"); worker_env && *worker_env) {
+        std::string_view we(worker_env);
+        if (we.rfind("keryx:", 0) == 0) {
+          pool_worker = worker_env;
+        } else {
+          pool_worker = pay + (we.front() == '.' ? "" : ".") + worker_env;
+        }
+      }
       if (const char *pass_env = std::getenv("NEXUS_POOL_PASSWORD"); pass_env && *pass_env)
         pool_password = pass_env;
       if (const char *backups_env = std::getenv("NEXUS_POOL_BACKUP_URLS"); backups_env && *backups_env) {
