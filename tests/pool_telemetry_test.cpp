@@ -38,7 +38,11 @@ int main(){try{
    auto handshake=probe.take_outbound_wire_log();
    const auto agent=parse(handshake[0]).fields().at("params").list_value().values(0).string_value();
    const bool expected=h16&&std::string_view(host).ends_with(".suprnova.cc");
-   check(agent==(expected?"keryx-miner/0.6.1-compatible (Nexus/0.0.5-dev; native-H16)":nexus_pool_agent),"compatibility agent scope/admission incorrect");
+   const bool expected_kp=std::string_view(host)=="s1.keryxpool.com"||std::string_view(host)=="keryxpool.com";
+   std::string expected_agent=nexus_pool_agent;
+   if(expected)expected_agent="keryx-miner/0.6.1-compatible (Nexus/0.0.5-dev; native-H16)";
+   else if(expected_kp)expected_agent="keryx-miner/0.6.1";
+   check(agent==expected_agent,"compatibility agent scope/admission incorrect");
   }
  }
  const auto t=Clock::now();StratumV4Client c(cfg);c.enable_loopback_test_mode(true);c.update_pool_work(0,t);

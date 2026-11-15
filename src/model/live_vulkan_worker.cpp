@@ -445,6 +445,11 @@ int main(int argc, char **argv) {
     endpoint = canonical_grpc_endpoint(endpoint);
   } else if (pool_worker.empty()) {
     pool_worker = pay_address;
+  } else {
+    std::string_view we(pool_worker);
+    if (we.rfind("keryx:", 0) != 0 && !pay_address.empty()) {
+      pool_worker = pay_address + (we.front() == '.' ? "" : ".") + pool_worker;
+    }
   }
 
   StartupReadiness startup([](std::string_view event) {

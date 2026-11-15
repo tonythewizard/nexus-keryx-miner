@@ -126,6 +126,30 @@ class PoolProbeTests(unittest.TestCase):
         self.assertTrue(mode.pool_requirements(cryo["url"])["ai_service_required"])
         self.assertIsNone(mode.pool_requirements(cryo["url"])["escrow_approved"])
 
+    def test_nodvexa_preset_migrates_without_changing_active_pool(self):
+        original = mode.default_config()
+        original["mode"] = "pool"
+        original["active_pool_id"] = "suprnova"
+        original["pools"] = [p for p in original["pools"] if p["id"] != "nodvexa"]
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder)/"mode.json"
+            path.write_text(json.dumps(original))
+            path.chmod(0o600)
+            before = path.read_bytes()
+            with patch.object(mode, "config_path", return_value=path):
+                cfg = mode.load()
+                self.assertEqual(cfg["active_pool_id"], "suprnova")
+                nodvexa = next(p for p in cfg["pools"] if p["id"] == "nodvexa")
+                self.assertEqual(nodvexa["url"], "stratum+ssl://nodvexa.eu:5555")
+                self.assertTrue(nodvexa["tls"])
+                self.assertEqual(path.read_bytes(), before)
+                path.write_text(json.dumps(cfg))
+                self.assertEqual(sum(p["id"]=="nodvexa" for p in mode.load()["pools"]), 1)
+        reqs = mode.pool_requirements(nodvexa["url"])
+        self.assertEqual(reqs["pool"], "nodvexa")
+        self.assertFalse(reqs["telemetry_required"])
+        self.assertIsNone(reqs["escrow_approved"])
+
     def test_real_tls_chain_and_name_validation(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

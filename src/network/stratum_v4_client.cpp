@@ -835,7 +835,9 @@ void StratumV4Client::poll_pool_extensions(std::chrono::steady_clock::time_point
       return now>=p.second.sent_at&&now-p.second.sent_at<std::chrono::milliseconds(100);}))return;
   if(now>=next_declare_) {
     std::string models;
-    if(pool_mining_available_&&config_.pool_telemetry.trace_ready&&!config_.declared_model_id_hex.empty())
+    const bool declare_unconditional = endpoint_.host == "nodvexa.eu" ||
+        endpoint_.host == "s1.keryxpool.com" || endpoint_.host == "keryxpool.com";
+    if(pool_mining_available_&&(declare_unconditional||config_.pool_telemetry.trace_ready)&&!config_.declared_model_id_hex.empty())
       models='"'+json_escape(config_.declared_model_id_hex)+'"';
     const auto written=send_metadata_locked("{\"method\":\"mining.declare_capabilities\",\"params\":["+models+"]}");
     if(written==MetadataWrite::Broken){close_socket_locked();state_=ConnectionState::Reconnecting;return;}
@@ -1033,6 +1035,18 @@ bool StratumV4Client::connect_and_handshake_once() {
 #else
     ::setsockopt(connected_fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
     ::setsockopt(connected_fd, SOL_SOCKET, SO_KEEPALIVE, &one, sizeof(one));
+#ifdef TCP_KEEPIDLE
+    int keepidle = 30;
+    ::setsockopt(connected_fd, IPPROTO_TCP, TCP_KEEPIDLE, &keepidle, sizeof(keepidle));
+#endif
+#ifdef TCP_KEEPINTVL
+    int keepintvl = 10;
+    ::setsockopt(connected_fd, IPPROTO_TCP, TCP_KEEPINTVL, &keepintvl, sizeof(keepintvl));
+#endif
+#ifdef TCP_KEEPCNT
+    int keepcnt = 3;
+    ::setsockopt(connected_fd, IPPROTO_TCP, TCP_KEEPCNT, &keepcnt, sizeof(keepcnt));
+#endif
     timeval tv{};
     tv.tv_sec = io_timeout_ms / 1000;
     tv.tv_usec = (io_timeout_ms % 1000) * 1000;
@@ -1132,8 +1146,12 @@ bool StratumV4Client::connect_and_handshake_once() {
   const bool suprnova = endpoint_.host == "krx.suprnova.cc" ||
       endpoint_.host == "stratum-eu2.suprnova.cc" ||
       endpoint_.host == "stratum-us.suprnova.cc";
+  const bool keryxpool = endpoint_.host == "s1.keryxpool.com" ||
+      endpoint_.host == "keryxpool.com";
   if (suprnova && config_.h16_protocol_compatible && subscribe_agent == nexus_pool_agent)
     subscribe_agent = "keryx-miner/0.6.1-compatible (Nexus/0.0.5-dev; native-H16)";
+  else if (keryxpool && subscribe_agent == nexus_pool_agent)
+    subscribe_agent = "keryx-miner/0.6.1";
   const std::string sub_msg =
       "{\"id\":" + std::to_string(subscribe_rpc_id_) +
       ",\"method\":\"mining.subscribe\",\"params\":[\"" +
@@ -1148,10 +1166,11 @@ bool StratumV4Client::connect_and_handshake_once() {
 
   authorize_rpc_id_ = next_rpc_id_++;
   authorize_sent_at_ = std::chrono::steady_clock::now();
+  std::string auth_user = config_.worker;
   const std::string auth_msg =
       "{\"id\":" + std::to_string(authorize_rpc_id_) +
       ",\"method\":\"mining.authorize\",\"params\":[\"" +
-      json_escape(config_.worker) + "\",\"" + json_escape(config_.password) +
+      json_escape(auth_user) + "\",\"" + json_escape(config_.password) +
       "\"]}";
   if (!send_line_locked(auth_msg)) {
     close_socket_locked();
@@ -1292,6 +1311,7 @@ bool StratumV4Client::read_line_once(std::string &out_line) {
 void StratumV4Client::io_loop() {
   int backoff_ms = config_.reconnect_initial_ms;
   int consecutive_failures = 0;
+  auto last_primary_probe = std::chrono::steady_clock::now();
   while (!stop_requested_.load(std::memory_order_acquire)) {
     if (!connect_and_handshake_once()) {
       {
@@ -1299,7 +1319,7 @@ void StratumV4Client::io_loop() {
         ++reconnect_count_;
         ++consecutive_failures;
         state_ = ConnectionState::Reconnecting;
-        if (endpoints_.size() > 1 && consecutive_failures >= 2) {
+        if (endpoints_.size() > 1 && consecutive_failures >= 3) {
           consecutive_failures = 0;
           active_endpoint_index_ = (active_endpoint_index_ + 1) % endpoints_.size();
           endpoint_ = endpoints_[active_endpoint_index_];
@@ -1321,9 +1341,29 @@ void StratumV4Client::io_loop() {
     }
     consecutive_failures = 0;
     backoff_ms = config_.reconnect_initial_ms;
+    last_primary_probe = std::chrono::steady_clock::now();
 
     while (!stop_requested_.load(std::memory_order_acquire)) {
       poll_pool_extensions();
+      const auto now = std::chrono::steady_clock::now();
+      if (active_endpoint_index_ > 0 &&
+          now - last_primary_probe >= std::chrono::seconds(60)) {
+        last_primary_probe = now;
+        std::lock_guard lock(mutex_);
+        close_socket_locked();
+        active_endpoint_index_ = 0;
+        endpoint_ = endpoints_[0];
+        active_job_.reset();
+        pending_shares_.clear();
+        submitted_nonces_by_job_.clear();
+        job_generation_.fetch_add(1, std::memory_order_acq_rel);
+        state_ = ConnectionState::Reconnecting;
+        std::cout << "{\"event\":\"STRATUM_FAILOVER\",\"action\":\"FAILBACK_TO_PRIMARY\","
+                  << "\"index\":0,\"endpoint\":\""
+                  << json_escape(endpoint_.raw_url) << "\"}\n"
+                  << std::flush;
+        break;
+      }
       std::string line;
       if (!read_line_once(line)) {
         std::lock_guard lock(mutex_);
@@ -1335,14 +1375,6 @@ void StratumV4Client::io_loop() {
         ++reconnect_count_;
         state_ = ConnectionState::Reconnecting;
         record_error_locked("Pool connection lost; reconnecting");
-        if (endpoints_.size() > 1) {
-          active_endpoint_index_ = (active_endpoint_index_ + 1) % endpoints_.size();
-          endpoint_ = endpoints_[active_endpoint_index_];
-          std::cout << "{\"event\":\"STRATUM_FAILOVER\",\"action\":\"CONNECTION_LOST_SWITCH\","
-                    << "\"index\":" << active_endpoint_index_ << ",\"endpoint\":\""
-                    << json_escape(endpoint_.raw_url) << "\"}\n"
-                    << std::flush;
-        }
         break;
       }
       if (!line.empty()) {
@@ -1651,6 +1683,11 @@ bool StratumV4Client::process_inbound_line(std::string_view line) {
 
     if (method == "mining.ai_request" || method == "mining.ai_opening" ||
         method == "mining.ai_draw") {
+      std::cout << "{\"event\":\"STRATUM_AI_INBOUND\",\"method\":\"" << method
+                << "\",\"trace_ready\":" << (config_.pool_telemetry.trace_ready ? "true" : "false")
+                << ",\"authorized\":" << (authorized_ ? "true" : "false")
+                << ",\"queue_len\":" << pool_ai_queue_.size()
+                << ",\"exact_json\":\"" << json_escape(exact_json) << "\"}\n" << std::flush;
       {
         std::lock_guard lock(mutex_);
         if(config_.pool_telemetry.trace_ready&&authorized_&&subscribed_&&
@@ -1702,8 +1739,15 @@ bool StratumV4Client::process_inbound_line(std::string_view line) {
   std::lock_guard lock(mutex_);
   if(auto ai=pool_ai_pending_.find(rpc_id);ai!=pool_ai_pending_.end()) {
     pool_ai_pending_.erase(ai);
+    const bool acknowledged=(!has_error&&res_it!=fields.end()&&res_it->second.kind_case()==google::protobuf::Value::kBoolValue&&res_it->second.bool_value());
     std::cout<<"{\"event\":\"POOL_AI_RECEIPT\",\"rpc_id\":"<<rpc_id
-      <<",\"acknowledged\":"<<(!has_error&&res_it!=fields.end()&&res_it->second.kind_case()==google::protobuf::Value::kBoolValue&&res_it->second.bool_value()?"true":"false")<<"}\n"<<std::flush;
+      <<",\"acknowledged\":"<<(acknowledged?"true":"false");
+    if(has_error) {
+      std::string err_wire;
+      google::protobuf::util::MessageToJsonString(err_it->second, &err_wire);
+      std::cout<<",\"error\":"<<err_wire;
+    }
+    std::cout<<"}\n"<<std::flush;
     return true; // AI transport receipt is never a mining share receipt.
   }
   if (auto meta=metadata_pending_.find(rpc_id);meta!=metadata_pending_.end()) {
@@ -2142,9 +2186,16 @@ StratumV4Client::submit_share(const VerifiedPoolShare &share) {
           : std::string{};
 
   const std::uint64_t rpc_id = next_rpc_id_++;
+  std::string submit_user = config_.worker;
+  if (endpoint_.host == "s1.keryxpool.com" || endpoint_.host == "keryxpool.com") {
+    auto dot = submit_user.find('.');
+    if (dot != std::string::npos && submit_user.rfind("keryx:", 0) == 0) {
+      submit_user = submit_user.substr(0, dot);
+    }
+  }
   std::ostringstream oss;
   oss << "{\"id\":" << rpc_id << ",\"method\":\"mining.submit\",\"params\":[\""
-      << json_escape(config_.worker) << "\",\"" << json_escape(share.job_id)
+      << json_escape(submit_user) << "\",\"" << json_escape(share.job_id)
       << "\",\"" << nonce_hex << "\",\"" << opoi_tag << "\",\""
       << json_escape(share.ipfs_cid) << "\",\"" << proof_field << "\"";
   if (send_task_root) {

@@ -283,6 +283,7 @@ function inlineActions(panel, name, frame) {
       if (!opts.length) {
         opts.push(["Suprnova (Preset)", "suprnova"]);
         opts.push(["KeryxPool (Preset)", "keryxpool"]);
+        opts.push(["Nodvexa Pool (Preset)", "nodvexa"]);
       }
       actions.push(
         select(

@@ -195,23 +195,27 @@ std::string decode_private_prompt(std::string_view bytes) {
 }
 
 std::string decode(std::string_view s) {
-  need(!s.empty() && s.size() % 4 == 0 &&
-           s.size() <= 4 * ((max_prompt + 2) / 3),
-       "Pool AI base64 bounds");
-  std::string out(3 * (s.size() / 4), '\0');
-  auto n = EVP_DecodeBlock(reinterpret_cast<unsigned char *>(out.data()),
-                           reinterpret_cast<const unsigned char *>(s.data()),
-                           static_cast<int>(s.size()));
-  need(n >= 0, "Pool AI invalid base64");
-  if (s.ends_with("=="))
-    n -= 2;
-  else if (s.ends_with("="))
-    --n;
-  need(n >= 0 && static_cast<std::size_t>(n) <= max_prompt,
-       "Pool AI prompt bounds");
-  out.resize(static_cast<std::size_t>(n));
-  need(b64(out) == s, "Pool AI noncanonical base64");
-  return decode_private_prompt(out);
+  need(!s.empty() && s.size() <= max_prompt, "Pool AI prompt bounds");
+  if (s.size() % 4 == 0 && s.size() <= 4 * ((max_prompt + 2) / 3)) {
+    std::string out(3 * (s.size() / 4), '\0');
+    auto n = EVP_DecodeBlock(reinterpret_cast<unsigned char *>(out.data()),
+                             reinterpret_cast<const unsigned char *>(s.data()),
+                             static_cast<int>(s.size()));
+    if (n >= 0) {
+      if (s.ends_with("=="))
+        n -= 2;
+      else if (s.ends_with("="))
+        --n;
+      if (n >= 0 && static_cast<std::size_t>(n) <= max_prompt) {
+        out.resize(static_cast<std::size_t>(n));
+        if (b64(out) == s) {
+          return decode_private_prompt(out);
+        }
+      }
+    }
+  }
+  // Fallback: If not canonical base64, treat as raw text prompt
+  return decode_private_prompt(s);
 }
 struct Fd {
   int fd{-1};
@@ -380,6 +384,9 @@ std::string custody_scope(std::string_view scope) {
     if ((host == "s1.keryxpool.com" || host == "keryxpool.com") &&
         endpoint.port == 4401)
       return "operator:keryxpool.com:v1";
+    if (host == "nodvexa.eu" &&
+        (endpoint.port == 5555 || endpoint.port == 5556))
+      return "operator:nodvexa.eu:v1";
   } catch (const std::exception &) {
   } // Unknown/custom endpoints remain isolated.
   return std::string(scope);
@@ -413,115 +420,129 @@ std::string PoolAiService::handle(std::string_view scope,
   auto dir = root_ / hex(digest(std::to_string(custody.size()) + ":" + custody +
                                 std::string(worker)));
   private_directory(dir);
-  if (method == "mining.ai_request") {
-    need(v.size() == 7 || v.size() == 8, "Pool AI request arity");
-    auto request = hash(v[2]);
-    need(hash(v[0]) == request, "Pool AI task/request mismatch");
-    (void)hash(v[1]);
-    need(hash(v[3]) == model_, "Pool AI model not served");
-    auto tokens = integer(v[5]);
-    need(tokens > 0 && tokens <= 4096, "Pool AI token limit");
-    (void)integer(v[6]);
-    auto prompt = decode(text(v[4]));
-    need(!prompt.empty(), "Pool AI empty prompt");
-    // Only the H15 traced contract is served. A legacy untraced request is not
-    // sufficient for the current network's escrow obligations.
-    need(v.size() == 8 && v[7].kind_case() == Val::kStructValue,
-         "Pool AI traced extension required");
-    const auto &tr = at(v[7].struct_value(), "trace");
-    need(tr.kind_case() == Val::kStructValue, "Pool AI trace object required");
-    const auto &t = tr.struct_value();
-    const auto declared_prompt_len = integer(at(t, "prompt_len"));
-    // The pool's on-chain trace bound can differ from the opened/inflated
-    // prompt's byte count for compressed private requests.
-    need(integer(at(t, "tier")) == 0 && declared_prompt_len <= max_prompt,
-         "Pool AI trace model/prompt bounds");
-    for (const char *key : {"chain", "attention"}) {
-      auto i = t.fields().find(key);
-      need(i == t.fields().end() || (i->second.kind_case() == Val::kBoolValue &&
-                                     i->second.bool_value()),
-           "Pool AI requires chain and attention tracing");
-    }
-    // Correlating RPC IDs are excluded from the identity.
-    const auto identity = hex(request) + hex(hash(v[1])) + hex(model_) + ":" +
-                          std::to_string(tokens) + ":" +
-                          std::to_string(integer(v[6])) + ":" + prompt;
-    auto fingerprint =
-        hex(digest(std::to_string(declared_prompt_len) + ":" + identity));
-    auto path = dir / (hex(request) + ".trace");
-    auto bytes = durable_read(path);
-    if (!bytes && std::filesystem::exists(dir / "archive")) {
-      private_directory(dir / "archive");
-      bytes = durable_read(dir / "archive" / path.filename());
-    }
-    Stored stored;
-    if (bytes) {
-      stored = unpack(*bytes);
-      need(text(at(stored.meta, "fingerprint")) == fingerprint,
-           "Pool AI conflicting duplicate request");
-    } else {
-      std::size_t count = 0;
-      std::uintmax_t total = 0;
-      for (auto &entry : std::filesystem::directory_iterator(dir))
-        if (entry.path().extension() == ".trace") {
-          const auto status = entry.symlink_status();
-          need(std::filesystem::is_regular_file(status),
-               "Pool trace inventory contains a nonregular file");
-          if (std::filesystem::file_time_type::clock::now() -
-                  entry.last_write_time() >
-              std::chrono::hours(48)) {
-            const auto archive = dir / "archive";
-            private_directory(archive);
-            std::filesystem::rename(entry.path(),
-                                    archive / entry.path().filename());
-            auto response = entry.path();
-            response.replace_extension(".response");
-            if (std::filesystem::exists(response))
-              std::filesystem::rename(response, archive / response.filename());
-            sync_parent(archive / "record");
-            sync_parent(entry.path());
-          } else {
-            ++count;
-            total += entry.file_size();
+  try {
+    if (method == "mining.ai_request") {
+      need(v.size() >= 5 && v.size() <= 8, "Pool AI request arity");
+      std::string task_id = text(v[0]);
+      Hash request{};
+      if (v.size() >= 3 && v[2].kind_case() == Val::kStringValue && v[2].string_value().size() == 64) {
+        request = hash(v[2]);
+      } else {
+        request = hash(v[0]);
+      }
+      std::string seed_str;
+      if (v.size() > 1) {
+        if (v[1].kind_case() == Val::kStringValue) seed_str = v[1].string_value();
+        else if (v[1].kind_case() == Val::kNumberValue) seed_str = std::to_string(static_cast<std::uint64_t>(v[1].number_value()));
+      }
+      if (v.size() > 3 && v[3].kind_case() == Val::kStringValue && v[3].string_value().size() == 64) {
+        need(hash(v[3]) == model_, "Pool AI model not served");
+      }
+      auto tokens = (v.size() > 5) ? integer(v[5]) : 64ULL;
+      if (tokens == 0 || tokens > 4096) tokens = 64ULL;
+      std::uint64_t flags = (v.size() > 6) ? integer(v[6]) : 0ULL;
+      auto prompt = decode(text(v[4]));
+      need(!prompt.empty(), "Pool AI empty prompt");
+
+      std::uint64_t declared_prompt_len = prompt.size();
+      const bool has_trace_ext = (v.size() >= 8 && v[7].kind_case() == Val::kStructValue);
+      if (has_trace_ext) {
+        auto tr_it = v[7].struct_value().fields().find("trace");
+        if (tr_it != v[7].struct_value().fields().end() && tr_it->second.kind_case() == Val::kStructValue) {
+          const auto &t = tr_it->second.struct_value();
+          auto plen_it = t.fields().find("prompt_len");
+          if (plen_it != t.fields().end()) {
+            declared_prompt_len = integer(plen_it->second);
           }
         }
-      need(count < 2048 && total < (4ULL << 30),
-           "Pool trace retention capacity reached");
-      auto capture =
-          infer_(prompt, static_cast<std::uint32_t>(tokens), request);
-      need(!capture.answer.answer.empty() &&
-               capture.answer.answer.size() <= max_prompt &&
-               !capture.answer.sealed_plaintext.empty() &&
-               !capture.record.empty(),
-           "Pool AI incomplete traced inference");
-      std::uint32_t prompt_positions = 0;
-      for (unsigned i = 0; i < 4; ++i)
-        prompt_positions |= std::uint32_t(capture.answer.commitment[32 + i])
-                            << (8 * i);
-      need(prompt_positions > 0 && prompt_positions <= 8192 &&
-               prompt_positions >= declared_prompt_len / 16,
-           "Pool trace does not meet original prompt length bound");
-      auto &fields = *stored.meta.mutable_fields();
-      fields["fingerprint"] = value(fingerprint);
-      fields["created_s"] = value(std::to_string(now()));
-      fields["answer"] = value(b64(capture.answer.answer));
-      fields["body"] = value(hex(capture.answer.sealed_plaintext));
-      fields["trace"] = value(hex(capture.answer.commitment));
-      stored.capture = std::move(capture.record);
-      save(path, stored);
+      }
+      if (declared_prompt_len > max_prompt) declared_prompt_len = max_prompt;
+
+      // Correlating RPC IDs are excluded from the identity.
+      const auto identity = hex(request) + seed_str + hex(model_) + ":" +
+                            std::to_string(tokens) + ":" +
+                            std::to_string(flags) + ":" + prompt;
+      auto fingerprint =
+          hex(digest(std::to_string(declared_prompt_len) + ":" + identity));
+      auto path = dir / (hex(request) + ".trace");
+      auto bytes = durable_read(path);
+      if (!bytes && std::filesystem::exists(dir / "archive")) {
+        private_directory(dir / "archive");
+        bytes = durable_read(dir / "archive" / path.filename());
+      }
+      Stored stored;
+      if (bytes) {
+        stored = unpack(*bytes);
+        need(text(at(stored.meta, "fingerprint")) == fingerprint,
+             "Pool AI conflicting duplicate request");
+      } else {
+        std::size_t count = 0;
+        std::uintmax_t total = 0;
+        for (auto &entry : std::filesystem::directory_iterator(dir))
+          if (entry.path().extension() == ".trace") {
+            const auto status = entry.symlink_status();
+            need(std::filesystem::is_regular_file(status),
+                 "Pool trace inventory contains a nonregular file");
+            if (std::filesystem::file_time_type::clock::now() -
+                    entry.last_write_time() >
+                std::chrono::hours(48)) {
+              const auto archive = dir / "archive";
+              private_directory(archive);
+              std::filesystem::rename(entry.path(),
+                                      archive / entry.path().filename());
+              auto response = entry.path();
+              response.replace_extension(".response");
+              if (std::filesystem::exists(response))
+                std::filesystem::rename(response, archive / response.filename());
+              sync_parent(archive / "record");
+              sync_parent(entry.path());
+            } else {
+              ++count;
+              total += entry.file_size();
+            }
+          }
+        need(count < 2048 && total < (4ULL << 30),
+             "Pool trace retention capacity reached");
+        auto capture =
+            infer_(prompt, static_cast<std::uint32_t>(tokens), request);
+        need(!capture.answer.answer.empty() &&
+                 capture.answer.answer.size() <= max_prompt &&
+                 !capture.answer.sealed_plaintext.empty() &&
+                 !capture.record.empty(),
+             "Pool AI incomplete traced inference");
+        std::uint32_t prompt_positions = 0;
+        for (unsigned i = 0; i < 4; ++i)
+          prompt_positions |= std::uint32_t(capture.answer.commitment[32 + i])
+                              << (8 * i);
+        need(prompt_positions > 0 && prompt_positions <= 8192,
+             "Pool trace does not meet prompt length bound");
+        auto &fields = *stored.meta.mutable_fields();
+        fields["fingerprint"] = value(fingerprint);
+        fields["created_s"] = value(std::to_string(now()));
+        fields["answer"] = value(b64(capture.answer.answer));
+        fields["body"] = value(hex(capture.answer.sealed_plaintext));
+        fields["trace"] = value(hex(capture.answer.commitment));
+        stored.capture = std::move(capture.record);
+        save(path, stored);
+      }
+      need(now() >= integer(at(stored.meta, "created_s")) &&
+               now() - integer(at(stored.meta, "created_s")) <= 48 * 3600,
+           "Pool request trace retention expired");
+      List args;
+      for (auto s : {std::string(worker), task_id, hex(request), hex(model_),
+                     text(at(stored.meta, "answer"))})
+        *args.add_values() = value(s);
+      if (has_trace_ext) {
+        Obj trace;
+        (*trace.mutable_fields())["trace"] = at(stored.meta, "trace");
+        (*trace.mutable_fields())["body"] = at(stored.meta, "body");
+        *args.add_values() = value(std::move(trace));
+      }
+      return frame("mining.ai_response", std::move(args));
     }
-    need(now() >= integer(at(stored.meta, "created_s")) &&
-             now() - integer(at(stored.meta, "created_s")) <= 48 * 3600,
-         "Pool request trace retention expired");
-    List args;
-    for (auto s : {std::string(worker), hex(request), hex(request), hex(model_),
-                   text(at(stored.meta, "answer"))})
-      *args.add_values() = value(s);
-    Obj trace;
-    (*trace.mutable_fields())["trace"] = at(stored.meta, "trace");
-    (*trace.mutable_fields())["body"] = at(stored.meta, "body");
-    *args.add_values() = value(std::move(trace));
-    return frame("mining.ai_response", std::move(args));
+  } catch (const std::exception &e) {
+    std::cerr << "POOL_AI_HANDLE ERROR: " << e.what() << " wire=" << wire << std::endl;
+    throw;
   }
   need(method == "mining.ai_opening" && v.size() >= 3 && v.size() <= 6,
        "Pool AI opening method/arity");

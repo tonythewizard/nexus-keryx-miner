@@ -7,6 +7,9 @@
 #include "keryx/nexus/gpu_device_policy.hpp"
 #include <algorithm>
 #include <array>
+#if defined(__x86_64__) || defined(_M_X64)
+#include <immintrin.h>
+#endif
 #include <cstring>
 #include <cstdlib>
 #include <iomanip>
@@ -60,9 +63,10 @@ struct CudaResidentSearch::Impl {
   ResidentWitnessTiles host_witness; // One bounded staging buffer; released with PoM on AI preemption.
   std::unique_ptr<V5Resources> v5;
   Resources resources;
-  CUfunction v5_kernel{},pad_fill_kernel{},v5_lockstep2_kernel{},v5_lockstep_kernel{};
+  CUfunction v5_kernel{},v5_2x_kernel{},pad_fill_kernel{},v5_lockstep2_kernel{},v5_lockstep_kernel{},v5_lockstep_w2_kernel{};
   CUfunction kernel{},seed_kernel{},fold_kernel{},witness_offsets_kernel{},witness_pairs_kernel{};
   bool contiguous_weights{false};
+  bool winner_dirty{true};
   std::string last_route;
   std::uint64_t x2_batches{}, fallback_batches{}, trace_batches{}, completed_nonces{};
   std::chrono::steady_clock::time_point route_report{};
@@ -88,6 +92,7 @@ struct CudaResidentSearch::Impl {
     int major=0,minor=0;check(cuDeviceGetAttribute(&major,CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR,ctx.device),"SM major");check(cuDeviceGetAttribute(&minor,CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR,ctx.device),"SM minor");
     char device_name[256]{};check(cuDeviceGetName(device_name,sizeof(device_name),ctx.device),"GPU model");
     require_cuda_model(device_name,major,minor,std::getenv("NEXUS_PRIMARY_GPU_NAME"));
+    (void)cuDevicePrimaryCtxSetFlags(ctx.device, CU_CTX_SCHED_SPIN);
     check(cuDevicePrimaryCtxRetain(&ctx.value,ctx.device),"retain shared primary context");ctx.retained=true;
     check(cuCtxSetCurrent(ctx.value),"bind shared primary context");resources.context=ctx.value;
     check(cuCtxSynchronize(),"synchronize shared primary context");
@@ -168,8 +173,10 @@ struct CudaResidentSearch::Impl {
     }
     check(cuModuleLoadData(&resources.module,_binary_nexus_resident_cubin_start),"load resident multi-architecture image");check(cuModuleGetFunction(&kernel,resources.module,"nexus_resident_search_preseeded"),"resident kernel entry point");
     check(cuModuleGetFunction(&v5_kernel,resources.module,"nexus_resident_search_v5"),"v5 resident kernel entry point");
+    (void)cuModuleGetFunction(&v5_2x_kernel,resources.module,"nexus_resident_search_v5_2x");
     (void)cuModuleGetFunction(&v5_lockstep2_kernel,resources.module,"pom_mine_v5_lockstep2_seeded");
     (void)cuModuleGetFunction(&v5_lockstep_kernel,resources.module,"pom_mine_v5_lockstep_seeded");
+    (void)cuModuleGetFunction(&v5_lockstep_w2_kernel,resources.module,"pom_mine_v5_lockstep_w2_seeded");
     if (contiguous_weights && v5_lockstep2_kernel) {
       std::cout << "PoM v5[CUDA]: lock-step walk available (6 KiB smem, contiguous weights at 0x"
                 << std::hex << contiguous_wbase << std::dec << ")\n" << std::flush;
@@ -187,6 +194,24 @@ struct CudaResidentSearch::Impl {
     tile_folds.allocate(fold_bytes);
     if(fold_bytes>tiles*8)check(cuMemsetD8(tile_folds.ptr+tiles*8,0,fold_bytes-tiles*8),"initialize tile fold padding");
     check(cuStreamCreate(&resources.stream,CU_STREAM_NON_BLOCKING),"resident stream");check(cuEventCreate(&resources.begin,0),"resident begin event");check(cuEventCreate(&resources.end,0),"resident end event");
+    {
+      int max_persist = 0;
+      CUdevice cur_dev{};
+      if (cuCtxGetDevice(&cur_dev) == CUDA_SUCCESS &&
+          cuDeviceGetAttribute(&max_persist, CU_DEVICE_ATTRIBUTE_MAX_PERSISTING_L2_CACHE_SIZE, cur_dev) == CUDA_SUCCESS &&
+          max_persist > 0) {
+        const std::size_t persist_limit = std::min<std::size_t>(static_cast<std::size_t>(max_persist), 3u * 1024u * 1024u);
+        if (cuCtxSetLimit(CU_LIMIT_PERSISTING_L2_CACHE_SIZE, persist_limit) == CUDA_SUCCESS) {
+          CUstreamAttrValue win{};
+          win.accessPolicyWindow.base_ptr = reinterpret_cast<void*>(tile_folds.ptr);
+          win.accessPolicyWindow.num_bytes = std::min<std::size_t>(fold_bytes, persist_limit);
+          win.accessPolicyWindow.hitRatio = 1.0f;
+          win.accessPolicyWindow.hitProp = CU_ACCESS_PROPERTY_PERSISTING;
+          win.accessPolicyWindow.missProp = CU_ACCESS_PROPERTY_NORMAL;
+          (void)cuStreamSetAttribute(resources.stream, CU_STREAM_ATTRIBUTE_ACCESS_POLICY_WINDOW, &win);
+        }
+      }
+    }
     check(cuMemHostAlloc(&resources.pinned_host,256,0),"allocate pinned host staging");
     void *fold_params[]={&bases.ptr,&prefix.ptr,&tensor_count,&tiles,&lut.ptr,&shift,&tile_folds.ptr};
     check(cuLaunchKernel(fold_kernel,static_cast<unsigned>((tiles+127)/128),1,1,128,1,1,0,resources.stream,fold_params,nullptr),"prepare immutable tile folds");
@@ -363,7 +388,10 @@ ResidentSearchResult CudaResidentSearch::run(const Hash&pph,std::uint64_t timest
 }
 ResidentSearchResult CudaResidentSearch::run_impl(const Hash &pph,std::uint64_t timestamp,std::uint64_t daa,const Hash &target,std::uint64_t start,std::uint64_t count,const std::function<void(bool)> &after_enqueue,Walk*trace){
   if(!count||count>18432||start==UINT64_MAX||count>UINT64_MAX-start)throw std::invalid_argument("resident nonce range outside bounded nonwrapping interval");
-  auto &p=*impl_;check(cuCtxSetCurrent(p.ctx.value),"bind resident context on current thread");
+  auto &p=*impl_;
+  CUcontext cur_ctx=nullptr;
+  if(cuCtxGetCurrent(&cur_ctx)!=CUDA_SUCCESS||cur_ctx!=p.ctx.value)
+    check(cuCtxSetCurrent(p.ctx.value),"bind resident context on current thread");
   if((daa>=pom_v5_activation_daa)!=bool(p.v5))throw std::logic_error("resident pad/PoM era mismatch; v5 must be prepared explicitly");
   if(trace && (!p.v5||count!=1))throw std::invalid_argument("diagnostics require exactly one v5 walk");
   if(!p.v5 && !p.path_metadata.ptr) {
@@ -400,7 +428,10 @@ ResidentSearchResult CudaResidentSearch::run_impl(const Hash &pph,std::uint64_t 
     p.sponge_valid=true;
   }
   const std::uint64_t none=UINT64_MAX;
-  check(cuMemsetD32Async(p.winner.ptr,0xFFFFFFFFu,2,p.resources.stream),"reset winner");
+  if(p.winner_dirty){
+    check(cuMemsetD32Async(p.winner.ptr,0xFFFFFFFFu,2,p.resources.stream),"reset winner");
+    p.winner_dirty=false;
+  }
   constexpr std::uint64_t salt[4]={0x7C99D381176D4EC4ULL,0xC2E28E3E28118C36ULL,0xD496CE1B129B76CAULL,0x47CF0979FA580BCEULL};
   std::uint64_t words[4],targets[4],unused[4]{};for(unsigned i=0;i<4;++i){words[i]=le64(pph.data()+8*i)^salt[i];targets[i]=le64(target.data()+8*i);}
   std::uint32_t k=256,seed_h10=1,precomputed=1;
@@ -425,7 +456,14 @@ ResidentSearchResult CudaResidentSearch::run_impl(const Hash &pph,std::uint64_t 
     launch_params[29]=&p.path_addresses.ptr;
   }
   const auto route=resident_route(bool(p.v5),p.contiguous_weights,bool(p.v5_lockstep2_kernel),bool(trace));
+  std::string chosen_kernel(route.kernel);
   if(route.lockstep2) {
+    static const bool env_no_w1 = (std::getenv("NEXUS_CUDA_LOCKSTEP_W1") == nullptr);
+    static const bool env_ls4 = (std::getenv("NEXUS_CUDA_LOCKSTEP4") != nullptr);
+    const bool use_w2 = p.v5_lockstep_w2_kernel && env_no_w1;
+    const bool use_ls4 = p.v5_lockstep_kernel && env_ls4;
+    chosen_kernel = use_w2 ? "v5_lockstep_w2" : (use_ls4 ? "v5_lockstep4" : std::string(route.kernel));
+    p.last_route = chosen_kernel;
     void *ls_params[] = {
       &p.contiguous_wbase, &p.tiles,
       &p.v5->pad.ptr, &p.v5->spec.tiles,
@@ -438,17 +476,38 @@ ResidentSearchResult CudaResidentSearch::run_impl(const Hash &pph,std::uint64_t 
       &p.h10_seeds.ptr,
       &p.winner.ptr
     };
-    check(cuLaunchKernel(p.v5_lockstep2_kernel, static_cast<unsigned>((count + 1) / 2), 1, 1, 32, 1, 1, 6144, p.resources.stream, ls_params, nullptr), "launch resident lockstep2 PoM");
+    if (use_w2) {
+      check(cuLaunchKernel(p.v5_lockstep_w2_kernel, static_cast<unsigned>((count + 7) / 8), 1, 1, 64, 1, 1, 24576, p.resources.stream, ls_params, nullptr), "launch resident lockstep_w2 PoM");
+    } else if (use_ls4) {
+      check(cuLaunchKernel(p.v5_lockstep_kernel, static_cast<unsigned>((count + 3) / 4), 1, 1, 32, 1, 1, 12288, p.resources.stream, ls_params, nullptr), "launch resident lockstep4 PoM");
+    } else {
+      check(cuLaunchKernel(p.v5_lockstep2_kernel, static_cast<unsigned>((count + 1) / 2), 1, 1, 32, 1, 1, 6144, p.resources.stream, ls_params, nullptr), "launch resident lockstep2 PoM");
+    }
   } else {
-    check(cuLaunchKernel(p.v5?p.v5_kernel:p.path_kernel,static_cast<unsigned>((count+3)/4),1,1,128,1,1,p.v5?12416:8320,p.resources.stream,launch_params.data(),nullptr),"launch resident PoM");
+    const bool use_v5_2x = p.v5 && p.v5_2x_kernel && !trace && std::getenv("NEXUS_CUDA_V5_2X") != nullptr;
+    if (use_v5_2x) {
+      check(cuLaunchKernel(p.v5_2x_kernel,static_cast<unsigned>((count+7)/8),1,1,128,1,1,24832,p.resources.stream,launch_params.data(),nullptr),"launch resident PoM v5_2x");
+    } else {
+      check(cuLaunchKernel(p.v5?p.v5_kernel:p.path_kernel,static_cast<unsigned>((count+3)/4),1,1,128,1,1,p.v5?12416:8320,p.resources.stream,launch_params.data(),nullptr),"launch resident PoM");
+    }
   }
   *pinned_winner=none;
   check(cuMemcpyDtoHAsync(pinned_winner,p.winner.ptr,8,p.resources.stream),"read winning nonce");
   check(cuEventRecord(p.resources.end,p.resources.stream),"record resident completion");if(after_enqueue){const auto status=cuEventQuery(p.resources.end);if(status!=CUDA_SUCCESS&&status!=CUDA_ERROR_NOT_READY)check(status,"resident completion query");after_enqueue(status==CUDA_ERROR_NOT_READY);}
-  check(cuEventSynchronize(p.resources.end),"complete resident PoM");
+  while (true) {
+    const auto res = cuEventQuery(p.resources.end);
+    if (res == CUDA_SUCCESS) break;
+    if (res != CUDA_ERROR_NOT_READY) check(res, "resident completion query");
+#if defined(__x86_64__) || defined(_M_X64)
+    _mm_pause();
+#endif
+  }
   float elapsed=0;check(cuEventElapsedTime(&elapsed,p.resources.begin,p.resources.end),"resident kernel elapsed");
   const std::uint64_t found=*pinned_winner;
-  if(found!=none&&(found<start||found-start>=count))throw std::runtime_error("resident GPU returned out-of-range nonce");
+  if(found!=none){
+    p.winner_dirty=true;
+    if(found<start||found-start>=count)throw std::runtime_error("resident GPU returned out-of-range nonce");
+  }
   if(trace){trace->offsets.resize(walk_steps);trace->states.resize(walk_steps+1);
     check(cuMemcpyDtoH(trace->offsets.data(),trace_offsets.ptr,walk_steps*8),"read v5 diagnostic offsets");
     check(cuMemcpyDtoH(trace->states.data(),trace_states.ptr,(walk_steps+1)*tile_bytes),"read v5 diagnostic states");}
@@ -456,15 +515,17 @@ ResidentSearchResult CudaResidentSearch::run_impl(const Hash &pph,std::uint64_t 
   if(trace) ++p.trace_batches;
   else {if(route.lockstep2) ++p.x2_batches; else ++p.fallback_batches; p.completed_nonces+=count;}
   const auto now=std::chrono::steady_clock::now();
-  const std::string route_key=std::string(route.kernel)+":"+std::string(route.reason);
-  if(p.last_route!=route_key || now-p.route_report>=std::chrono::seconds(5)) {
-    std::cout<<"POM_KERNEL_ROUTE kernel="<<route.kernel<<" reason="<<route.reason
-             <<" contiguous_weights="<<(p.contiguous_weights?"true":"false")
-             <<" batch="<<count<<" kernel_ms="<<elapsed
-             <<" completed_x2_batches="<<p.x2_batches<<" completed_fallback_batches="<<p.fallback_batches
-             <<" completed_trace_batches="<<p.trace_batches<<" completed_search_nonces="<<p.completed_nonces
-             <<" scope=solver_instance\n"<<std::flush;
-    p.last_route=route_key;p.route_report=now;
+  if(p.last_route!=chosen_kernel || now-p.route_report>=std::chrono::seconds(5)) {
+    const std::string route_key=chosen_kernel+":"+std::string(route.reason);
+    if(p.last_route!=route_key || now-p.route_report>=std::chrono::seconds(5)) {
+      std::cout<<"POM_KERNEL_ROUTE kernel="<<chosen_kernel<<" reason="<<route.reason
+               <<" contiguous_weights="<<(p.contiguous_weights?"true":"false")
+               <<" batch="<<count<<" kernel_ms="<<elapsed
+               <<" completed_x2_batches="<<p.x2_batches<<" completed_fallback_batches="<<p.fallback_batches
+               <<" completed_trace_batches="<<p.trace_batches<<" completed_search_nonces="<<p.completed_nonces
+               <<" scope=solver_instance\n"<<std::flush;
+      p.last_route=route_key;p.route_report=now;
+    }
   }
   return {found==none?std::nullopt:std::optional(found),count,elapsed};
 }

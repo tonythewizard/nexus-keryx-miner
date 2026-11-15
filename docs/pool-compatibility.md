@@ -88,3 +88,14 @@ Local qualification covers an actual worker, model and GPU against an isolated
 pool simulator, including worker restart, nodeless operation, same-operator aliases and subsequent opening. It is not an
 acknowledgement, payment, or escrow approval from either public pool. Broader
 hardware tiers and pool-side implementation differences remain separate checks.
+
+## Nodvexa Pool
+
+Nodvexa Pool (`nodvexa.eu`) supports standard Stratum over TLS with:
+- PPLNS: `stratum+ssl://nodvexa.eu:5555` (0% mandatory pool fee on new ordinary rewards)
+- SOLO: `stratum+ssl://nodvexa.eu:5556` (2% fee)
+
+Both endpoints require TLS (TLSv1.3 supported) and use standard worker authentication
+(`mining.authorize` with public wallet address or `address.worker`). AI inference model
+tiers (Qwen, GLM, Gemma, Kimi) are rewarded per pool policy. Escrow custody isolation
+is tagged under operator scope `operator:nodvexa.eu:v1`.

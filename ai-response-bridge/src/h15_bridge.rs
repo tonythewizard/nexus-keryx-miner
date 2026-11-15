@@ -582,7 +582,7 @@ impl prod::Replay for Native<'_> {
 pub unsafe extern "C" fn nexus_h15_open(
     c: *mut c_void,
     api: *const Api,
-    block: *const u8,
+    seed: *const u8,
     response: *const u8,
     path: *const u64,
     npath: usize,
@@ -596,24 +596,23 @@ pub unsafe extern "C" fn nexus_h15_open(
         }
         let c = unsafe { &*(c as *const Capture) };
         let api = unsafe { &*api };
-        let block: Hash = unsafe { view(block, 32, 32) }?.try_into().unwrap();
+        let seed: Hash = unsafe { view(seed, 32, 32) }?.try_into().unwrap();
         let response: Hash = unsafe { view(response, 32, 32) }?.try_into().unwrap();
         let path = unsafe { view(path, npath, 16) }?;
         let prev = unsafe { view(prev, nprev, 112 << 10) }?;
-        let bodies = build(c, api, block, response, path, prev)?;
+        let bodies = build_seeded(c, api, seed, response, path, prev)?;
         unsafe { output(s::bundle(&bodies), out) }
     })
 }
 
-pub(crate) fn build(
+pub(crate) fn build_seeded(
     c: &Capture,
     api: &Api,
-    block: Hash,
+    seed: Hash,
     response: Hash,
     path: &[u64],
     prev: &[u8],
 ) -> Result<Vec<Vec<u8>>, String> {
-    let seed = p::trace_seed(&block, &response);
     let index = Native { api };
     let mut runtime = Native { api };
     let bodies = if prev.is_empty() {
@@ -659,6 +658,18 @@ pub(crate) fn build(
         )?]
     };
     Ok(bodies)
+}
+
+pub(crate) fn build(
+    c: &Capture,
+    api: &Api,
+    block: Hash,
+    response: Hash,
+    path: &[u64],
+    prev: &[u8],
+) -> Result<Vec<Vec<u8>>, String> {
+    let seed = p::trace_seed(&block, &response);
+    build_seeded(c, api, seed, response, path, prev)
 }
 
 /// Offline parity oracle: the native callback must be exclusively admitted by
