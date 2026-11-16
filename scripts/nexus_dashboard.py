@@ -128,6 +128,7 @@ def pool_display_name(config, stratum):
         known = {"krx.suprnova.cc": "Suprnova", "stratum-eu2.suprnova.cc": "Suprnova",
                  "stratum-us.suprnova.cc": "Suprnova", "krx.cryo-pool.com": "Cryo Pool",
                  "nodvexa.eu": "Nodvexa Pool", "www.nodvexa.eu": "Nodvexa Pool",
+                 "communistpool.com": "Communist Pool", "www.communistpool.com": "Communist Pool",
                  "s1.keryxpool.com": "KeryxPool", "keryxpool.com": "KeryxPool"}
         return known.get(actual[0], actual[0] or "Unknown pool")
     selected = next((pool for pool in pools if pool.get("id") == config.get("active_pool_id")), {})

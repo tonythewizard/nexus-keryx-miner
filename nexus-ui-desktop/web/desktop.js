@@ -284,6 +284,7 @@ function inlineActions(panel, name, frame) {
         opts.push(["Suprnova (Preset)", "suprnova"]);
         opts.push(["KeryxPool (Preset)", "keryxpool"]);
         opts.push(["Nodvexa Pool (Preset)", "nodvexa"]);
+        opts.push(["Communist Pool (Preset)", "communistpool"]);
       }
       actions.push(
         select(

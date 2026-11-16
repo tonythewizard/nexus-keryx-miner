@@ -836,7 +836,8 @@ void StratumV4Client::poll_pool_extensions(std::chrono::steady_clock::time_point
   if(now>=next_declare_) {
     std::string models;
     const bool declare_unconditional = endpoint_.host == "nodvexa.eu" ||
-        endpoint_.host == "s1.keryxpool.com" || endpoint_.host == "keryxpool.com";
+        endpoint_.host == "s1.keryxpool.com" || endpoint_.host == "keryxpool.com" ||
+        endpoint_.host == "communistpool.com" || endpoint_.host == "www.communistpool.com";
     if(pool_mining_available_&&(declare_unconditional||config_.pool_telemetry.trace_ready)&&!config_.declared_model_id_hex.empty())
       models='"'+json_escape(config_.declared_model_id_hex)+'"';
     const auto written=send_metadata_locked("{\"method\":\"mining.declare_capabilities\",\"params\":["+models+"]}");
@@ -1147,7 +1148,9 @@ bool StratumV4Client::connect_and_handshake_once() {
       endpoint_.host == "stratum-eu2.suprnova.cc" ||
       endpoint_.host == "stratum-us.suprnova.cc";
   const bool keryxpool = endpoint_.host == "s1.keryxpool.com" ||
-      endpoint_.host == "keryxpool.com";
+      endpoint_.host == "keryxpool.com" ||
+      endpoint_.host == "communistpool.com" ||
+      endpoint_.host == "www.communistpool.com";
   if (suprnova && config_.h16_protocol_compatible && subscribe_agent == nexus_pool_agent)
     subscribe_agent = "keryx-miner/0.6.1-compatible (Nexus/0.0.5-dev; native-H16)";
   else if (keryxpool && subscribe_agent == nexus_pool_agent)
@@ -2187,7 +2190,8 @@ StratumV4Client::submit_share(const VerifiedPoolShare &share) {
 
   const std::uint64_t rpc_id = next_rpc_id_++;
   std::string submit_user = config_.worker;
-  if (endpoint_.host == "s1.keryxpool.com" || endpoint_.host == "keryxpool.com") {
+  if (endpoint_.host == "s1.keryxpool.com" || endpoint_.host == "keryxpool.com" ||
+      endpoint_.host == "communistpool.com" || endpoint_.host == "www.communistpool.com") {
     auto dot = submit_user.find('.');
     if (dot != std::string::npos && submit_user.rfind("keryx:", 0) == 0) {
       submit_user = submit_user.substr(0, dot);

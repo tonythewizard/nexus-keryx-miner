@@ -150,6 +150,30 @@ class PoolProbeTests(unittest.TestCase):
         self.assertFalse(reqs["telemetry_required"])
         self.assertIsNone(reqs["escrow_approved"])
 
+    def test_communistpool_preset_migrates_without_changing_active_pool(self):
+        original = mode.default_config()
+        original["mode"] = "pool"
+        original["active_pool_id"] = "suprnova"
+        original["pools"] = [p for p in original["pools"] if p["id"] != "communistpool"]
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder)/"mode.json"
+            path.write_text(json.dumps(original))
+            path.chmod(0o600)
+            before = path.read_bytes()
+            with patch.object(mode, "config_path", return_value=path):
+                cfg = mode.load()
+                self.assertEqual(cfg["active_pool_id"], "suprnova")
+                communist = next(p for p in cfg["pools"] if p["id"] == "communistpool")
+                self.assertEqual(communist["url"], "stratum+tcp://communistpool.com:7773")
+                self.assertFalse(communist["tls"])
+                self.assertEqual(path.read_bytes(), before)
+                path.write_text(json.dumps(cfg))
+                self.assertEqual(sum(p["id"]=="communistpool" for p in mode.load()["pools"]), 1)
+        reqs = mode.pool_requirements(communist["url"])
+        self.assertEqual(reqs["pool"], "communistpool")
+        self.assertFalse(reqs["telemetry_required"])
+        self.assertIsNone(reqs["escrow_approved"])
+
     def test_real_tls_chain_and_name_validation(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
