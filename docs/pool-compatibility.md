@@ -99,3 +99,12 @@ Both endpoints require TLS (TLSv1.3 supported) and use standard worker authentic
 (`mining.authorize` with public wallet address or `address.worker`). AI inference model
 tiers (Qwen, GLM, Gemma, Kimi) are rewarded per pool policy. Escrow custody isolation
 is tagged under operator scope `operator:nodvexa.eu:v1`.
+
+## Communist Pool
+
+Communist Pool (`communistpool.com`) operates a Miningcore-compatible Stratum v4 service with 1% PPLNS pool fee:
+- TCP (Main line): `stratum+tcp://communistpool.com:7773` (starting diff 0.001)
+- TCP (High start): `stratum+tcp://communistpool.com:7774` (0.005) and `7775` (0.015)
+- TLS (Encrypted line): `stratum+ssl://communistpool.com:7777` (starting diff 0.001)
+
+Authentication requires standard worker format (`address` or `address.rig`). In `mining.subscribe`, the pool enforces User-Agent `keryx-miner/0.6.1` or `keryx-miner-supr` (H16 hardfork pad validation). AI inference capabilities are declared via `mining.declare_capabilities`. Payout minimum is 2500 KRX with 60-minute batch intervals.

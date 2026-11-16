@@ -29,7 +29,7 @@ int main(){try{
  auto unqualified=cfg;unqualified.pool_telemetry.trace_ready=true;bool refused=false;
  try{StratumV4Client unsafe(unqualified);}catch(const std::runtime_error&){refused=true;}
  check(refused,"unqualified pool AI route enabled by configuration");
- for (const auto &host : {"krx.suprnova.cc", "stratum-eu2.suprnova.cc", "stratum-us.suprnova.cc", "s1.keryxpool.com", "custom.invalid"}) {
+ for (const auto &host : {"krx.suprnova.cc", "stratum-eu2.suprnova.cc", "stratum-us.suprnova.cc", "s1.keryxpool.com", "communistpool.com", "custom.invalid"}) {
   for (const bool h16 : {false, true}) {
    auto probe_cfg=cfg;probe_cfg.pool_url=std::string("stratum+tcp://")+host+":4404";
    probe_cfg.h16_protocol_compatible=h16;
@@ -38,7 +38,7 @@ int main(){try{
    auto handshake=probe.take_outbound_wire_log();
    const auto agent=parse(handshake[0]).fields().at("params").list_value().values(0).string_value();
    const bool expected=h16&&std::string_view(host).ends_with(".suprnova.cc");
-   const bool expected_kp=std::string_view(host)=="s1.keryxpool.com"||std::string_view(host)=="keryxpool.com";
+   const bool expected_kp=std::string_view(host)=="s1.keryxpool.com"||std::string_view(host)=="keryxpool.com"||std::string_view(host)=="communistpool.com";
    std::string expected_agent=nexus_pool_agent;
    if(expected)expected_agent="keryx-miner/0.6.1-compatible (Nexus/0.0.5-dev; native-H16)";
    else if(expected_kp)expected_agent="keryx-miner/0.6.1";
