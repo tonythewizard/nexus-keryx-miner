@@ -201,6 +201,31 @@ int main(int argc, char **argv) {
             "different operator inherited trace");
     }
     check(inferences == 4, "same-pool alias regenerated inference");
+    // A long valid capture exceeded the old 64 MiB disk/restore budget.
+    for(const auto &scope : {"stratum+tcp://s1.keryxpool.com:4401",
+                            "stratum+tcp://krx.suprnova.cc:4404",
+                            "stratum+tcp://communistpool.com:7773",
+                            "stratum+ssl://nodvexa.eu:5555",
+                            "stratum+ssl://krx.cryo-pool.com:5555"}) {
+      unsigned generated=0;
+      const auto large_infer=[&](auto prompt,auto tokens,const auto &hash) {
+        ++generated;
+        auto capture=infer(prompt,tokens,hash);
+        capture.record.resize((64U<<20)+1,0x5a);
+        return capture;
+      };
+      const auto large_open=[](auto capture,const auto &,const auto &,const auto &,auto,auto) {
+        check(capture.size()==(64U<<20)+1 && capture.back()==0x5a,"large durable capture changed");
+        return std::vector<std::uint8_t>{1};
+      };
+      const auto dir=root/"large-records";
+      { ai::PoolAiService svc(dir,model,large_infer,large_open);svc.handle(scope,"synthetic",wire); }
+      ai::PoolAiService restored(dir,model,large_infer,large_open);
+      restored.handle(scope,"synthetic",wire);
+      check(generated==1,"large record regenerated after restart");
+      const auto result=parse(restored.handle(scope,"synthetic",opening));
+      check(result.fields().at("params").list_value().values(5).string_value().empty(),"large opening recovery failed");
+    }
     // A corrupt durable record is retained and cannot trigger regeneration.
     for (auto &dir : std::filesystem::directory_iterator(root))
       for (auto &entry : std::filesystem::directory_iterator(dir.path()))
@@ -216,7 +241,7 @@ int main(int argc, char **argv) {
     } catch (...) {
       refused = true;
     }
-    check(refused && inferences == 4, "corrupt record regenerated response");
+    check(refused && inferences == 9, "corrupt record regenerated response");
     // Test compressed private prompt decompression (\x00KZ\x01 + DEFLATE)
     {
       const std::string text = "Hello compressed prompt world from pool AI!";

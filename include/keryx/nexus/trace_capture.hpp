@@ -54,6 +54,8 @@ struct TraceApi {
   int (*generate_n)(void *,const char *,std::size_t,const std::int32_t *,int,int,
       const char *,std::size_t,int,char *,int,std::int32_t *,int,int *,int *,int,int){};
 
+  int (*clear_allocation_error)(){};
+  int (*memory_info)(std::size_t *,std::size_t *){};
 };
 class TraceCapture final {
 public:
@@ -68,11 +70,12 @@ public:
   std::vector<std::vector<std::uint8_t>> replay_multi(const TracedGeneration &capture,
       std::span<const std::pair<std::uint32_t,std::uint32_t>> captures,std::uint32_t slot_bytes);
   std::uint32_t configure_sequence(std::span<const SequenceLayer> layers,std::uint32_t n_attn,
-      std::uint32_t n_recur,std::uint32_t heads,std::uint32_t interval);
+      std::uint32_t n_recur,std::uint32_t heads,std::uint32_t interval,std::uint32_t minimum_positions=0);
   std::vector<SequenceCapture> replay_sequence(const TracedGeneration &,std::span<const SequenceSpan>,std::uint32_t max_chunks);
   bool length_aware() const noexcept { return api_.generate_n != nullptr; }
   void use_task_context();
-  void ensure_full_context();
+  void ensure_full_context(std::size_t minimum_positions=0);
+  std::uint32_t allocated_context() const noexcept { return allocated_context_; }
 private:
   TraceApi api_;
   void *model_;
@@ -80,9 +83,12 @@ private:
   std::uint32_t allocated_context_{};
   std::uint32_t context_floor_{};
   bool context_full_{true};
+  std::uint32_t fitted_context_{};
   std::uint32_t sequence_leaves_{};
   bool sequence_ready_{true};
   void read_sequence(TracedGeneration &);
+  void clear_allocation_error();
+  bool compute_headroom() const;
   void ensure_context_for(std::size_t positions);
   [[noreturn]] void fail(const char *operation, int code) const;
 };

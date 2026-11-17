@@ -64,5 +64,34 @@ int main(){try{
  check(cap.configure_sequence({},0,0,0,0)==0);check(!cap.trace_tokens(tokens).sequence_roots);
  for(int abi:{6,8}){api.abi=abi;detail::TraceCapture old(api,&mode,8192);reject([&]{old.configure_sequence(layout,1,1,2,32);});}
  api.abi=9;api.seq_replay=nullptr;detail::TraceCapture incomplete(api,&mode,8192);reject([&]{incomplete.configure_sequence(layout,1,1,2,32);});
+
+ static int allocated=8192;
+ api.seq_replay=seq_replay;
+ api.context_acquire=[](void*,int requested){allocated=requested;return requested;};
+ api.seq_configure=[](void*,const std::uint32_t*,std::uint32_t n,std::uint32_t,std::uint32_t,std::uint32_t,std::uint32_t){return n && allocated>2048 ? -3 : 0;};
+ detail::TraceCapture pressure(api,&mode,8192);
+ pressure.configure(manifest,8192,7);
+ check(pressure.configure_sequence(layout,1,1,2,32)==10);
+ check(pressure.allocated_context()==2048);
+ pressure.use_task_context();
+ reject([&]{pressure.configure_sequence(layout,1,1,2,32,3000);});
+ check(pressure.allocated_context()>=3000);
+
+ api.clear_allocation_error=[](){return 2;};
+ detail::TraceCapture cleared(api,&mode,8192);
+ cleared.configure(manifest,8192,7);
+ check(cleared.configure_sequence(layout,1,1,2,32)==10);
+ api.clear_allocation_error=[](){return 700;};
+ detail::TraceCapture poisoned(api,&mode,8192);
+ poisoned.configure(manifest,8192,7);
+ allocated=8192;
+ reject([&]{poisoned.configure_sequence(layout,1,1,2,32);});
+ api.clear_allocation_error=nullptr;
+ api.seq_configure=[](void*,const std::uint32_t*,std::uint32_t,std::uint32_t,std::uint32_t,std::uint32_t,std::uint32_t){return 0;};
+ api.memory_info=[](std::size_t *free,std::size_t *total){*free=128U<<20;*total=8ULL<<30;return 0;};
+ detail::TraceCapture too_tight(api,&mode,8192);
+ too_tight.configure(manifest,8192,7);
+ reject([&]{too_tight.configure_sequence(layout,1,1,2,32);});
+ check(too_tight.allocated_context()==1024);
  std::cout<<"ABI9_SEQUENCE_CPU=PASS capture_replay=MOCK malformed=REJECTED gpu=NOT_USED\n";
 }catch(const std::exception&e){std::cerr<<e.what()<<'\n';return 1;}}

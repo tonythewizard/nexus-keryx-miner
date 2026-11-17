@@ -127,3 +127,20 @@ Trace/context protocol caps and generated-token budgets are enforced while
 native capture remains limited to32768 positions. See
 [refresh details](upstream-refresh.md). A schema4 record is preserved if an
 older rollback worker cannot read it; forced downgrade/reset is unsupported.
+
+## Bounded inference memory and long pool captures
+
+The common CUDA trace adapter fits the KV context after allocation failure or
+when fewer than 256 MiB remain for compute scratch. It keeps the stock physical
+microbatch. Generation budgets the prompt against the fitted context; replay
+never fits below the complete stored token sequence. Recoverable CUDA allocation
+errors are cleared before retrying; other CUDA errors remain failures. If the
+minimum context cannot leave compute headroom, inference fails before launching
+GPU work. Existing captures, signatures and journals are retained.
+
+Pool capture serialization and disk recovery allow 512 MiB of positional leaves
+plus 2 MiB of bounded metadata. Opening buffers retain their separate 64 MiB
+limit. All pool endpoints share the same record path and recovery checks. Socket
+success alone does not reset Stratum reconnect backoff: authorization and a
+stable session are required. Repeated authorization failures also participate
+in configured endpoint failover.

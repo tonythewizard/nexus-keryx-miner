@@ -11,6 +11,8 @@ use std::{
 };
 const CAP: usize = 64 << 20;
 const CAPTURE_CAP: usize = 512 << 20;
+// Positional leaves plus tokens, roots, sequence roots and sealed plaintext.
+const STORED_CAPTURE_CAP: usize = CAPTURE_CAP + (2 << 20);
 #[repr(C)]
 pub struct NativeCapture {
     pub tokens: *const i32,
@@ -89,7 +91,10 @@ pub(crate) fn guard(f: impl FnOnce() -> Result<(), String>) -> i32 {
     }
 }
 pub(crate) unsafe fn output(bytes: Vec<u8>, out: *mut Buffer) -> Result<(), String> {
-    if out.is_null() || bytes.len() > CAP {
+    unsafe { output_bounded(bytes, out, CAP) }
+}
+unsafe fn output_bounded(bytes: Vec<u8>, out: *mut Buffer, cap: usize) -> Result<(), String> {
+    if out.is_null() || bytes.len() > cap {
         return Err("invalid output budget".into());
     }
     let b = bytes.into_boxed_slice();
@@ -375,9 +380,10 @@ pub unsafe extern "C" fn nexus_h15_encode_capture(c: *mut c_void, out: *mut Buff
             return Err("missing capture".into());
         }
         unsafe {
-            output(
+            output_bounded(
                 borsh::to_vec(&*(c as *const Capture)).map_err(|_| "capture serialization")?,
                 out,
+                STORED_CAPTURE_CAP,
             )
         }
     })
@@ -397,7 +403,7 @@ pub unsafe extern "C" fn nexus_h15_decode_capture(
         if out.is_null() {
             return Err("missing output".into());
         }
-        let c = Capture::try_from_slice(unsafe { view(data, len, CAP) }?)
+        let c = Capture::try_from_slice(unsafe { view(data, len, STORED_CAPTURE_CAP) }?)
             .map_err(|_| "corrupt capture")?;
         if !c.trace.record.storage_shape_valid()
             || c.trace.seq.is_none()
@@ -746,6 +752,19 @@ mod tests {
         assert_eq!(std::mem::offset_of!(NativeCapture, prompt_positions), 56);
         assert_eq!(std::mem::size_of::<Api>(), 64);
         assert_eq!(std::mem::size_of::<Buffer>(), 16);
+    }
+    #[test]
+    fn stored_capture_budget_exceeds_opening_budget_without_relaxing_openings() {
+        let mut out=Buffer {data:std::ptr::null_mut(),length:0};
+        assert!(unsafe { output(vec![0; CAP+1], &mut out) }.is_err());
+        assert!(out.data.is_null());
+        unsafe {
+            output_bounded(vec![7; CAP+1], &mut out, STORED_CAPTURE_CAP).unwrap();
+            assert_eq!(out.length,CAP+1);
+            assert_eq!(*out.data.add(CAP),7);
+            nexus_h15_buffer_free(out);
+            assert!(view::<u8>(std::ptr::null(),STORED_CAPTURE_CAP+1,STORED_CAPTURE_CAP).is_err());
+        }
     }
     #[test]
     fn prefix_capacity_failure_preserves_output() {
