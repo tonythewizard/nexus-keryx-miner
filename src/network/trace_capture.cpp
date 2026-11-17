@@ -28,15 +28,41 @@ void TraceCapture::use_task_context() {
   context_full_=false;
   if(got<=0) fail("task context acquisition",got);
 }
-void TraceCapture::ensure_full_context() {
-  if(context_full_ && allocated_context_) return;
+bool TraceCapture::compute_headroom() const {
+  if(!api_.memory_info) return true;
+  std::size_t free=0,total=0;
+  const auto rc=api_.memory_info(&free,&total);
+  if(rc) fail("CUDA compute headroom query",rc);
+  return free>=(256U<<20);
+}
+void TraceCapture::clear_allocation_error() {
+  if(!api_.clear_allocation_error) return;
+  const auto error=api_.clear_allocation_error();
+  // cudaErrorMemoryAllocation=2 is recoverable. Never suppress a poisoned
+  // context (illegal address, device lost, etc.) and continue mining.
+  if(error!=0 && error!=2) fail("unrecoverable CUDA allocation error",error);
+}
+void TraceCapture::ensure_full_context(std::size_t minimum_positions) {
+  require(minimum_positions<=context_,"Replay exceeds configured context");
+  if(context_full_ && allocated_context_>=std::max<std::size_t>(1,minimum_positions)) return;
   require((api_.abi==8 || api_.abi==9) && api_.context_acquire,"Full context requires ABI8/9 context acquisition");
-  int got=api_.context_acquire(model_,static_cast<int>(context_));
-  if(got<0 && context_floor_ && context_floor_<context_)
-    got=api_.context_acquire(model_,static_cast<int>(context_floor_));
+  // Keep the stock microbatch and proof geometry. Only shrink the KV context
+  // when allocation fails; a replay must still fit every committed position.
+  const auto floor=std::min(context_,std::max<std::uint32_t>(
+      context_floor_ ? context_floor_ : 1024U,static_cast<std::uint32_t>(minimum_positions)));
+  auto requested=std::max(floor,fitted_context_ ? fitted_context_ : context_);
+  int got=-1;
+  for(;;) {
+    got=api_.context_acquire(model_,static_cast<int>(requested));
+    if(got<=0) clear_allocation_error();
+    if(got>0 || requested==floor) break;
+    requested=std::max(floor,requested/2);
+  }
   allocated_context_=got>0 ? static_cast<std::uint32_t>(got) : 0;
   context_full_=got>0;
   if(got<=0) fail("full context acquisition",got);
+  require(allocated_context_>=minimum_positions,"Allocated context is smaller than replay demand");
+  fitted_context_=allocated_context_;
 }
 void TraceCapture::ensure_context_for(std::size_t positions) {
   require(positions && positions<=context_,"Invalid replay context demand");
@@ -47,12 +73,12 @@ void TraceCapture::ensure_context_for(std::size_t positions) {
     context_full_=false;
     if(allocated_context_>=positions) return;
   }
-  ensure_full_context();
+  ensure_full_context(positions);
   require(allocated_context_>=positions,"Allocated context is smaller than replay demand");
 }
 [[noreturn]] void TraceCapture::fail(const char *operation, int code) const {
   std::string err;
-  if (std::strcmp(operation, "configure") == 0 && api_.error) {
+  if (api_.error) {
     const char *msg = api_.error();
     if (msg && *msg) err = std::string(": ") + msg;
   }
@@ -190,7 +216,7 @@ std::vector<std::vector<std::uint8_t>> TraceCapture::replay_multi(const TracedGe
   return result;
 }
 std::uint32_t TraceCapture::configure_sequence(std::span<const SequenceLayer> layers,
-    std::uint32_t n_attn,std::uint32_t n_recur,std::uint32_t heads,std::uint32_t interval) {
+    std::uint32_t n_attn,std::uint32_t n_recur,std::uint32_t heads,std::uint32_t interval,std::uint32_t minimum_positions) {
   require(api_.abi==9 && api_.seq_configure && api_.seq_roots && api_.seq_replay,
           "Sequence capture requires complete ABI9");
   if(layers.empty()) {
@@ -211,11 +237,29 @@ std::uint32_t TraceCapture::configure_sequence(std::span<const SequenceLayer> la
   }
   sequence_leaves_=0;sequence_ready_=false;
   // Configuration is independent of the positional trace and survives reconfiguration.
-  if(!layers.empty()) ensure_full_context();
+  if(!layers.empty()) ensure_full_context(minimum_positions);
   std::vector<std::uint32_t> flat;flat.reserve(layers.size()*5);
   for(const auto &row:layers)flat.insert(flat.end(),row.begin(),row.end());
-  const int rc=api_.seq_configure(model_,flat.data(),static_cast<std::uint32_t>(layers.size()),n_attn,n_recur,heads,interval);
+  auto configure=[&]{return api_.seq_configure(model_,flat.data(),static_cast<std::uint32_t>(layers.size()),n_attn,n_recur,heads,interval);};
+  int rc=configure();
+  const auto floor=std::min(context_,std::max(context_floor_ ? context_floor_ : 1024U,minimum_positions));
+  if(rc==-3) clear_allocation_error();
+  while(!layers.empty() && allocated_context_>floor && (rc==-3 || (rc==0 && !compute_headroom()))) {
+    if(rc==0) {
+      const auto released=api_.seq_configure(model_,nullptr,0,0,0,0,0);
+      if(released) fail("sequence release for context fit",released);
+    }
+    const auto previous=allocated_context_;
+    fitted_context_=std::max(floor,allocated_context_/2);
+    context_full_=false;
+    ensure_full_context(minimum_positions);
+    rc=configure();
+    if(rc==-3) clear_allocation_error();
+    if(allocated_context_>=previous) break;
+  }
   if(rc)fail("sequence configure",rc);
+  if(!layers.empty() && !compute_headroom())
+    throw std::runtime_error("Insufficient CUDA compute headroom after context fitting; inference deferred");
   sequence_leaves_=layers.empty() ? 0 : 2*heads*(n_attn+n_recur)+heads*n_attn;
   sequence_ready_=true;
   return sequence_leaves_;

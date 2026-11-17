@@ -23,8 +23,8 @@ using Obj = google::protobuf::Struct;
 using Val = google::protobuf::Value;
 using List = google::protobuf::ListValue;
 using Hash = PoolAiService::Hash;
-constexpr std::size_t max_prompt = 1U << 20, max_record = 64U << 20,
-                      max_file = 70U << 20;
+constexpr std::size_t max_prompt = 1U << 20, max_record = 514U << 20,
+                      max_file = max_record + (6U << 20);
 void need(bool b, const char *s) {
   if (!b)
     throw std::runtime_error(s);

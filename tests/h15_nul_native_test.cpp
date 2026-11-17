@@ -5,17 +5,31 @@
 #include <google/protobuf/struct.pb.h>
 #include <google/protobuf/util/json_util.h>
 #include <iostream>
+#include <fstream>
+#include <cstdlib>
+#ifdef NEXUS_TEST_HAS_CUDA
+#include <cuda.h>
+#endif
 #include <stdexcept>
 
 using namespace keryx::nexus;
 int main(int argc, char **argv) {
   try {
-    if (argc != 6)
+    if (argc != 6 && argc != 7)
       throw std::runtime_error(
           "usage: nul-test runtime model tree isolated-state mock-endpoint");
     opoi::StockLlamaRuntime runtime(argv[1], argv[2]);
     if (!runtime.supports_length_aware_tracing())
       throw std::runtime_error("runtime lacks sized traced entry point");
+#ifdef NEXUS_TEST_HAS_CUDA
+    struct Pressure { CUdeviceptr ptr{}; ~Pressure(){if(ptr)cuMemFree(ptr);} } pressure;
+    if(const auto raw=std::getenv("NEXUS_TEST_VRAM_PRESSURE_MIB")) {
+      runtime.use_task_context();
+      const auto mib=std::stoul(raw);
+      if(mib>1024 || cuMemAlloc(&pressure.ptr,mib<<20)!=CUDA_SUCCESS)
+        throw std::runtime_error("test VRAM pressure allocation failed");
+    }
+#endif
     model::ReadOnlyGguf gguf(argv[2]);
     model::SparseMerkleIndex merkle(gguf, argv[3]);
     constexpr std::array<std::uint8_t, 32> model_id{
@@ -29,8 +43,14 @@ int main(int argc, char **argv) {
                               model_id, true);
     client.set_gpu_owner([](const auto &work) { work(); });
     constexpr char raw[] = "Say OK.\0Then say SAFE.\0";
-    const std::string_view prompt(raw, sizeof(raw) - 1);
-    if (std::count(prompt.begin(), prompt.end(), '\0') != 2)
+    std::string input(raw, sizeof(raw) - 1);
+    if(argc==7) {
+      std::ifstream file(argv[6],std::ios::binary);
+      if(!file) throw std::runtime_error("prompt fixture missing");
+      input.assign(std::istreambuf_iterator<char>(file),{});
+    }
+    const std::string_view prompt(input);
+    if (argc==6 && std::count(prompt.begin(), prompt.end(), '\0') != 2)
       throw std::runtime_error("NUL fixture invalid");
     const auto traced = client.infer(prompt, 16, request);
     if (traced.answer.empty() || traced.sealed_plaintext.empty())
@@ -38,6 +58,16 @@ int main(int argc, char **argv) {
     const auto verified = client.verify_capture(2);
     if (verified[0] == 0)
       throw std::runtime_error("NUL trace had no independently checked points");
+    if(argc==7) {
+      const auto bytes=client.export_pool_capture();
+      if(bytes.size()<=64U<<20) throw std::runtime_error("long capture did not exceed legacy storage cap");
+      std::array<std::uint8_t,32> response{},seed{};response.fill(3);seed.fill(7);
+      const auto opening=client.open_pool_capture(bytes,request,response,seed,{},{});
+      if(ai::H15AuditClient::unbundle(opening).size()!=4)
+        throw std::runtime_error("large persisted opening failed");
+      std::cout<<"H15_LARGE_CAPTURE=PASS bytes="<<bytes.size()<<" verified_points="<<verified[0]<<" persisted_opening_pieces=4"<<std::endl;
+      return 0;
+    }
     unsigned pool_inferences = 0;
     const auto infer = [&](std::string_view input, std::uint32_t tokens,
                            const auto &hash) {

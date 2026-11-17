@@ -342,6 +342,10 @@ StockLlamaRuntime::StockLlamaRuntime(std::string library_path, std::string gguf_
     api.replay_multi = symbol_optional<decltype(api.replay_multi)>(impl_->library, "keryx_llama_replay_multi");
     api.error = impl_->last_error;
     api.abi = impl_->abi;
+    if(!is_vulkan) {
+      api.clear_allocation_error=symbol_optional<decltype(api.clear_allocation_error)>(impl_->library,"cudaGetLastError");
+      api.memory_info=symbol_optional<decltype(api.memory_info)>(impl_->library,"cudaMemGetInfo");
+    }
     if (impl_->abi == 9 || is_vulkan) {
       api.seq_configure = symbol_optional<decltype(api.seq_configure)>(impl_->library,"keryx_llama_seq_configure");
       api.seq_roots = symbol_optional<decltype(api.seq_roots)>(impl_->library,"keryx_llama_seq_roots");
@@ -474,11 +478,11 @@ std::string StockLlamaRuntime::infer(std::string_view prompt, std::uint32_t max_
 }
 
 std::uint32_t StockLlamaRuntime::configure_sequence(std::span<const SequenceLayer> layers,
-    std::uint32_t n_attn,std::uint32_t n_recur,std::uint32_t heads,std::uint32_t interval) {
+    std::uint32_t n_attn,std::uint32_t n_recur,std::uint32_t heads,std::uint32_t interval,std::uint32_t minimum_positions) {
   if(!impl_ || !impl_->trace || impl_->abi!=9)throw std::runtime_error("Sequence trace requires ABI9");
   const std::lock_guard lock(impl_->mutex);
   if (!layers.empty()) impl_->scratch_active = true;
-  return impl_->trace->configure_sequence(layers,n_attn,n_recur,heads,interval);
+  return impl_->trace->configure_sequence(layers,n_attn,n_recur,heads,interval,minimum_positions);
 }
 std::vector<SequenceCapture> StockLlamaRuntime::replay_sequence(const TracedGeneration &capture,
     std::span<const SequenceSpan> spans,std::uint32_t max_chunks) {
@@ -550,6 +554,7 @@ std::vector<std::vector<std::uint8_t>> StockLlamaRuntime::replay_trace_multi(con
 } // namespace keryx::nexus::opoi
 
 namespace keryx::nexus::opoi {
+std::uint32_t StockLlamaRuntime::trace_allocated_context() const noexcept {return impl_ && impl_->trace ? impl_->trace->allocated_context() : 0;}
 std::uint32_t StockLlamaRuntime::trace_context_capacity() const noexcept{return impl_?impl_->context_capacity:0;}
 
 bool StockLlamaRuntime::pom_ready() const {

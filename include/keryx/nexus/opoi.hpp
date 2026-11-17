@@ -67,11 +67,12 @@ public:
   std::vector<std::vector<std::uint8_t>> replay_trace_multi(const TracedGeneration &capture,
       std::span<const std::pair<std::uint32_t,std::uint32_t>> captures,std::uint32_t slot_bytes);
   std::uint32_t configure_sequence(std::span<const SequenceLayer> layers,std::uint32_t n_attn,
-      std::uint32_t n_recur,std::uint32_t heads,std::uint32_t interval);
+      std::uint32_t n_recur,std::uint32_t heads,std::uint32_t interval,std::uint32_t minimum_positions=0);
   std::vector<SequenceCapture> replay_sequence(const TracedGeneration &,std::span<const SequenceSpan>,std::uint32_t max_chunks);
   int abi_version() const noexcept;
   bool supports_length_aware_tracing() const noexcept;
   std::uint32_t trace_context_capacity() const noexcept;
+  std::uint32_t trace_allocated_context() const noexcept;
   // ABI8/9. Caller must release/synchronize any PoM pad before switching
   // context; acquisition never resets the shared CUDA primary context.
   void use_task_context();

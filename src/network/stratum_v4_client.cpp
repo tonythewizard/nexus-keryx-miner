@@ -1316,7 +1316,7 @@ void StratumV4Client::io_loop() {
   int consecutive_failures = 0;
   auto last_primary_probe = std::chrono::steady_clock::now();
   while (!stop_requested_.load(std::memory_order_acquire)) {
-    if (!connect_and_handshake_once()) {
+    const auto retry = [&] {
       {
         std::unique_lock lock(mutex_);
         ++reconnect_count_;
@@ -1340,18 +1340,35 @@ void StratumV4Client::io_loop() {
         });
       }
       backoff_ms = std::min(config_.reconnect_max_ms, backoff_ms * 2);
+    };
+    if (!connect_and_handshake_once()) {
+      retry();
       continue;
     }
-    consecutive_failures = 0;
-    backoff_ms = config_.reconnect_initial_ms;
-    last_primary_probe = std::chrono::steady_clock::now();
+    const auto connected_at = std::chrono::steady_clock::now();
+    bool stable = false, failback = false;
+    last_primary_probe = connected_at;
 
     while (!stop_requested_.load(std::memory_order_acquire)) {
       poll_pool_extensions();
       const auto now = std::chrono::steady_clock::now();
+      {
+        std::lock_guard lock(mutex_);
+        // A TCP connect is not an authorized, stable pool session.
+        if (!stable && authorized_ && now-connected_at >= std::chrono::seconds(30)) {
+          stable = true;
+          consecutive_failures = 0;
+          backoff_ms = config_.reconnect_initial_ms;
+        }
+        if (state_ == ConnectionState::AuthorizationRejected) {
+          close_socket_locked();
+          break;
+        }
+      }
       if (active_endpoint_index_ > 0 &&
           now - last_primary_probe >= std::chrono::seconds(60)) {
         last_primary_probe = now;
+        failback = true;
         std::lock_guard lock(mutex_);
         close_socket_locked();
         active_endpoint_index_ = 0;
@@ -1375,7 +1392,6 @@ void StratumV4Client::io_loop() {
         pending_shares_.clear();
         submitted_nonces_by_job_.clear();
         job_generation_.fetch_add(1, std::memory_order_acq_rel);
-        ++reconnect_count_;
         state_ = ConnectionState::Reconnecting;
         record_error_locked("Pool connection lost; reconnecting");
         break;
@@ -1390,6 +1406,7 @@ void StratumV4Client::io_loop() {
         }
       }
     }
+    if (!failback && !stop_requested_.load(std::memory_order_acquire)) retry();
   }
 }
 

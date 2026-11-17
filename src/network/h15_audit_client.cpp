@@ -307,14 +307,14 @@ struct H15AuditClient::Impl {
          "Audit mainnet identity unavailable");
     return unhex(r.getblockdaginforesponse().sink());
   }
-  void configure() {
+  void configure(std::uint32_t minimum_positions=0) {
     need(runtime.abi_version() == 9, "H15 requires ABI9");
     const auto positions =
         std::min<std::uint32_t>(runtime.trace_context_capacity(),
                                 (512U << 20) / 32 / info.position_leaves);
     runtime.configure_trace(manifest, positions, info.position_leaves);
     runtime.configure_sequence(layers, info.n_attn, info.n_recur, info.heads,
-                               info.interval);
+                               info.interval,minimum_positions);
   }
   static int weight(void *u, std::uint64_t index, std::uint8_t *out,
                     std::uint8_t *path, std::size_t *n) {
@@ -393,7 +393,7 @@ struct H15AuditClient::Impl {
             try { rt.use_task_context(); } catch (...) {}
           }
         } scratch_release{p.runtime};
-        p.configure();
+        p.configure(static_cast<std::uint32_t>(raw->positions));
         configured=std::chrono::steady_clock::now();
         opoi::TracedGeneration g;
         g.tokens.assign(raw->tokens, raw->tokens + raw->positions);
@@ -516,8 +516,10 @@ bool H15AuditClient::ready() const noexcept {
 }
 std::vector<std::uint8_t> H15AuditClient::export_pool_capture() {
   auto &p=*impl_;std::lock_guard lock(p.mutex);Buffer out;
-  need(p.capture&&nexus_h15_encode_capture(p.capture,&out.b)==0,"Pool capture encoding failed");
-  need(out.b.length<=64U<<20,"Pool capture storage bound exceeded");
+  need(p.capture, "Pool capture missing");
+  if(nexus_h15_encode_capture(p.capture,&out.b)!=0)
+    throw std::runtime_error(std::string("Pool capture encoding failed: ")+nexus_h15_error());
+  need(out.b.length<=514U<<20,"Pool capture storage bound exceeded");
   return buffer_bytes(out.b);
 }
 std::vector<std::uint8_t> H15AuditClient::open_pool_capture(std::span<const std::uint8_t> bytes,
@@ -562,7 +564,8 @@ AiTracedAnswer H15AuditClient::infer(std::string_view prompt,
        "H15 request prefix failed");
 
   std::string working_prompt(prompt);
-  const std::size_t budget = opoi::prompt_budget(8192, max_tokens);
+  const auto context=std::min(8192U,p.runtime.trace_allocated_context());
+  const std::size_t budget = opoi::prompt_budget(context, std::min(max_tokens,context/2));
   if (working_prompt.size() > budget && budget > 0) {
     if (auto cut = opoi::head_tail_cut(working_prompt, budget)) {
       working_prompt = std::move(*cut);
